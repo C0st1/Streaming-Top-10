@@ -475,6 +475,7 @@ async function buildConfigHTML(countries, latestWeek) {
                 <input type="password" id="tmdbKey" placeholder="e.g. 8a7f3bc2d1...">
                 <button class="toggle-pwd" onclick="togglePwd('tmdbKey', this)" title="Show/Hide">👁️</button>
             </div>
+            <p class="hint" style="margin-bottom:8px;">Required for Stremio metadata. Get yours free at <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org</a>.</p>
             <button class="btn btn-sm" id="testKeyBtn" onclick="testTmdbKey()">Test Key</button> <span id="keyStatus" class="key-status"></span>
         </div>
         <div class="field">
@@ -483,6 +484,7 @@ async function buildConfigHTML(countries, latestWeek) {
                 <input type="password" id="rpdbKey" placeholder="e.g. t1-xxxxxx...">
                 <button class="toggle-pwd" onclick="togglePwd('rpdbKey', this)" title="Show/Hide">👁️</button>
             </div>
+            <p class="hint">Adds Netflix-style rating overlays to posters. Get a key at <a href="https://ratingposterdb.com/" target="_blank">ratingposterdb.com</a>.</p>
         </div>
 
         <button class="btn btn-primary" id="generateBtn" onclick="generateLink()">Generate Install Link</button>
