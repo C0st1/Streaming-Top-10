@@ -437,10 +437,18 @@ async function buildConfigHTML(countries, latestWeek) {
         .btn-sm { display: inline-block; width: auto; padding: 8px 14px; font-size: 12px; margin-top: 6px; }
         .key-status { display: inline-flex; font-size: 12px; margin-left: 8px; }
         .key-status.valid { color: var(--success); } .key-status.invalid { color: var(--red); }
-        #resultArea { display: none; margin-top: 24px; }
+        #resultArea { display: none; margin-top: 24px; animation: popIn 0.3s ease; }
         .url-box { display: flex; align-items: center; gap: 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; }
         .url-box-text { flex: 1; font-family: monospace; font-size: 11px; color: #5dade2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .copy-btn { font-size: 11px; background: transparent; border: 1px solid #555; color: #fff; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+        .copy-btn { font-size: 11px; background: transparent; border: 1px solid #555; color: #fff; padding: 4px 10px; border-radius: 4px; cursor: pointer; transition: 0.2s;}
+        .copy-btn.copied { background: rgba(46, 204, 113, 0.2); border-color: var(--success); color: var(--success); transform: scale(1.05); }
+        .toast { display: none; align-items: center; gap: 8px; background: rgba(46, 204, 113, 0.1); border: 1px solid rgba(46, 204, 113, 0.3); border-radius: 6px; padding: 10px 14px; font-size: 13px; color: var(--success); margin-bottom: 15px; }
+        .toast.show { display: flex; animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        @keyframes popIn { 0% { opacity: 0; transform: translateY(-10px) scale(0.95); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+        .input-with-icon { position: relative; display: flex; align-items: center; }
+        .input-with-icon input { padding-right: 40px; }
+        .toggle-pwd { position: absolute; right: 10px; background: transparent; border: none; font-size: 16px; cursor: pointer; opacity: 0.6; padding: 0; transition: 0.2s; }
+        .toggle-pwd:hover { opacity: 1; transform: scale(1.1); }
     </style>
 </head>
 <body>
@@ -463,18 +471,25 @@ async function buildConfigHTML(countries, latestWeek) {
         </div>
         <div class="field">
             <label><span class="required-dot"></span> TMDB API Key</label>
-            <input type="text" id="tmdbKey" placeholder="e.g. 8a7f3bc2d1...">
+            <div class="input-with-icon">
+                <input type="password" id="tmdbKey" placeholder="e.g. 8a7f3bc2d1...">
+                <button class="toggle-pwd" onclick="togglePwd('tmdbKey', this)" title="Show/Hide">👁️</button>
+            </div>
             <button class="btn btn-sm" id="testKeyBtn" onclick="testTmdbKey()">Test Key</button> <span id="keyStatus" class="key-status"></span>
         </div>
         <div class="field">
             <label>RPDB API Key <span class="optional-tag">optional</span></label>
-            <input type="text" id="rpdbKey" placeholder="e.g. t1-xxxxxx...">
+            <div class="input-with-icon">
+                <input type="password" id="rpdbKey" placeholder="e.g. t1-xxxxxx...">
+                <button class="toggle-pwd" onclick="togglePwd('rpdbKey', this)" title="Show/Hide">👁️</button>
+            </div>
         </div>
 
         <button class="btn btn-primary" id="generateBtn" onclick="generateLink()">Generate Install Link</button>
         <div id="resultArea">
             <p style="font-size:12px;color:#999;">Manifest URL:</p>
             <div class="url-box"><span class="url-box-text" id="manifestDisplayUrl"></span><button class="copy-btn" onclick="copyLink()">Copy</button></div>
+            <div class="toast" id="copyToast">✅ Copied to clipboard!</div>
             <button class="btn btn-secondary" onclick="installDirectly()">▶ Install to Stremio</button>
         </div>
     </div>
@@ -613,7 +628,21 @@ async function buildConfigHTML(countries, latestWeek) {
         document.getElementById('resultArea').style.display = 'block';
     }
     
-    function copyLink() { navigator.clipboard.writeText(currentManifestUrl); }
+    function togglePwd(id, btn) {
+        const input = document.getElementById(id);
+        if (input.type === 'password') { input.type = 'text'; btn.textContent = '🙈'; }
+        else { input.type = 'password'; btn.textContent = '👁️'; }
+    }
+
+    function copyLink() {
+        navigator.clipboard.writeText(currentManifestUrl);
+        const btn = document.querySelector('.copy-btn');
+        const toast = document.getElementById('copyToast');
+        btn.textContent = '✓ Copied';
+        btn.classList.add('copied');
+        toast.classList.add('show');
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); toast.classList.remove('show'); }, 2500);
+    }
     function installDirectly() { window.location.href = currentManifestUrl.replace(/^https?:\\/\\//, 'stremio://'); }
 </script>
 </body>
