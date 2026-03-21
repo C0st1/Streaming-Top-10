@@ -179,7 +179,7 @@ async function getAvailableCountries() {
     return list;
 }
 
-const TITLE_OVERRIDES = { "the race": "tt35052447" };
+const TITLE_OVERRIDES = {};
 
 const COUNTRY_LANG_MAP = {
     "Argentina": "es-AR", "Australia": "en-AU", "Austria": "de-AT",
