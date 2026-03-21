@@ -358,7 +358,7 @@ async function buildConfigHTML(countries, latestWeek) {
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         :root { --red: #e50914; --bg: #0a0a0a; --surface: #111111; --surface2: #1a1a1a; --border: #2a2a2a; --text: #f0f0f0; --muted: #777; --success: #2ecc71; --warning: #f39c12; }
         html { scroll-behavior: smooth; }
-        body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
+        body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px; gap: 24px; }
         .card { width: 100%; max-width: 480px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; box-shadow: 0 32px 80px rgba(0,0,0,0.6); position: relative; z-index:1; }
         .card-header { background: linear-gradient(135deg, #1a0000 0%, #1a0505 50%, #0a0a0a 100%); padding: 36px 36px 28px; border-bottom: 1px solid var(--border); }
         .card-header h1 { font-family: 'Bebas Neue', sans-serif; font-size: 28px; letter-spacing: 1px; }
@@ -424,8 +424,13 @@ async function buildConfigHTML(countries, latestWeek) {
         
         .field-row { display: flex; flex-direction: column; gap: 0; }
         
-        .tooltip-icon { display: inline-block; background: rgba(255,255,255,0.1); color: #aaa; border-radius: 50%; width: 14px; height: 14px; text-align: center; font-size: 10px; line-height: 14px; margin-left: 6px; cursor: help; position: relative; }
-        .tooltip-icon:hover::after { content: attr(data-tooltip); position: absolute; left: 50%; transform: translateX(-50%); bottom: 140%; background: #222; color: #fff; padding: 6px 10px; border-radius: 4px; font-size: 12px; white-space: nowrap; z-index: 10; font-weight: normal; box-shadow: 0 4px 12px rgba(0,0,0,0.5); pointer-events: none; }
+        .tooltip-container { position: relative; display: inline-block; margin-left: 6px; }
+        .tooltip-icon { background: rgba(255,255,255,0.1); color: #aaa; border-radius: 50%; width: 15px; height: 15px; display: flex; align-items: center; justify-content: center; font-size: 10px; cursor: help; }
+        .tooltip-container:hover .tooltip-icon { background: rgba(255,255,255,0.2); color: #fff; }
+        .tooltip-content { visibility: hidden; opacity: 0; position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(100% + 8px); background: #222; color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 12px; white-space: nowrap; z-index: 100; font-weight: normal; box-shadow: 0 4px 12px rgba(0,0,0,0.5); transition: 0.15s; pointer-events: none; border: 1px solid #333; }
+        .tooltip-content a { color: #5c9eff; text-decoration: none; pointer-events: auto; font-weight: bold; }
+        .tooltip-content a:hover { text-decoration: underline; }
+        .tooltip-container:hover .tooltip-content { visibility: visible; opacity: 1; pointer-events: auto; }
         
         details.advanced-settings { margin-top: 10px; border: 1px solid var(--border); border-radius: 6px; background: rgba(0,0,0,0.1); }
         details.advanced-settings summary { padding: 12px 16px; cursor: pointer; user-select: none; font-weight: 500; outline: none; font-size: 14px; }
@@ -459,7 +464,12 @@ async function buildConfigHTML(countries, latestWeek) {
     </div>
     <div class="card-body">
         <div class="field">
-            <label><span class="required-dot"></span> Country <span class="optional-tag">Reorderable Catalogs</span> <span class="tooltip-icon" data-tooltip="Click or search to select. Drag tags to re-order Stremio catalogs.">?</span></label>
+            <label><span class="required-dot"></span> Country <span class="optional-tag">Reorderable Catalogs</span> 
+                <div class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <div class="tooltip-content">Click or search to select. Drag tags to re-order Stremio catalogs.</div>
+                </div>
+            </label>
             <div class="custom-select">
                 <input type="text" id="countrySearch" placeholder="Search a country to add..." autocomplete="off">
                 <div class="dropdown-list" id="countryDropdown"></div>
@@ -468,7 +478,12 @@ async function buildConfigHTML(countries, latestWeek) {
         </div>
         
         <div class="field">
-            <label><span class="required-dot"></span> TMDB API Key <span class="tooltip-icon" data-tooltip="Required for metadata. Get yours free at themoviedb.org">?</span></label>
+            <label><span class="required-dot"></span> TMDB API Key 
+                <div class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <div class="tooltip-content">Required for metadata. Get yours free at <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org</a></div>
+                </div>
+            </label>
             <div class="input-with-icon">
                 <input type="password" id="tmdbKey" placeholder="e.g. 8a7f3bc2d1...">
                 <button class="toggle-pwd" onclick="togglePwd('tmdbKey', this)" title="Show/Hide">👁️</button>
@@ -480,7 +495,12 @@ async function buildConfigHTML(countries, latestWeek) {
             <summary>⚙️ Advanced Settings</summary>
             <div class="advanced-settings-content">
                 <div class="field">
-                    <label>RPDB API Key <span class="optional-tag">optional</span> <span class="tooltip-icon" data-tooltip="Adds Netflix-style rating overlays to posters. ratingposterdb.com">?</span></label>
+                    <label>RPDB API Key <span class="optional-tag">optional</span> 
+                        <div class="tooltip-container">
+                            <span class="tooltip-icon">?</span>
+                            <div class="tooltip-content">Adds Netflix-style rating overlays to posters. Get yours at <a href="https://ratingposterdb.com/" target="_blank">ratingposterdb.com</a></div>
+                        </div>
+                    </label>
                     <div class="input-with-icon">
                         <input type="password" id="rpdbKey" placeholder="e.g. t1-xxxxxx...">
                         <button class="toggle-pwd" onclick="togglePwd('rpdbKey', this)" title="Show/Hide">👁️</button>
@@ -488,7 +508,12 @@ async function buildConfigHTML(countries, latestWeek) {
                     <div style="margin-top:6px;"><button class="btn btn-sm" id="testRpdbBtn" onclick="testRpdbKey()">Test Format</button> <span id="rpdbStatus" class="key-status"></span></div>
                 </div>
                 <div class="field" style="margin-bottom: 0;">
-                    <label>Catalog Tab Overrides <span class="optional-tag">optional</span> <span class="tooltip-icon" data-tooltip="Isolate Netflix content into customizable Discover tabs.">?</span></label>
+                    <label>Catalog Tab Overrides <span class="optional-tag">optional</span> 
+                        <div class="tooltip-container">
+                            <span class="tooltip-icon">?</span>
+                            <div class="tooltip-content">Isolate Netflix content into customizable Discover tabs.</div>
+                        </div>
+                    </label>
                     <div class="field-row" style="margin-bottom:0; gap:10px;">
                         <input type="text" id="movieOverride" placeholder="Movie Tab Name (e.g. Films)">
                         <input type="text" id="seriesOverride" placeholder="Series Tab Name (e.g. TV Shows)">
@@ -510,7 +535,7 @@ async function buildConfigHTML(countries, latestWeek) {
     </div>
 </div>
 <div class="footer">
-    Netflix Top 10 Stremio Addon • <a href="https://github.com/stremio/stremio-addon-sdk" target="_blank">Verified Serverless Transport</a>
+    Netflix Top 10 Stremio Addon &nbsp;&bull;&nbsp; <a href="https://github.com/stremio/stremio-addon-sdk" target="_blank">Verified Serverless Transport</a>
 </div>
 <script>
     const availableCountries = ["Global", ...${JSON.stringify(countries)}];
@@ -657,7 +682,7 @@ async function buildConfigHTML(countries, latestWeek) {
         const stat = document.getElementById('rpdbStatus');
         if (!key) { stat.textContent = '❌ Key is empty'; stat.className = 'key-status error'; return; }
         stat.className = 'key-status';
-        if (/^t\d-[a-zA-Z0-9]+$/.test(key)) {
+        if (key.length >= 8 && /^[a-zA-Z0-9-]+$/.test(key)) {
             stat.textContent = '✅ Format looks good';
             stat.className = 'key-status success';
         } else {
