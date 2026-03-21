@@ -158,25 +158,7 @@ async function fetchNetflixTitles(categoryType, country = "Global") {
     } catch { return []; }
 }
 
-async function getTrendForTitle(title, categoryType, country) {
-    try {
-        const parsed = await getParsedTSV();
-        const catData = parsed.data[country]?.[categoryType];
-        if (!catData) return null;
-        const weeks = Object.keys(catData).filter((k) => k !== "latestWeek").sort();
-        if (weeks.length < 1) return null;
-        
-        const latestEntry = catData[weeks[weeks.length - 1]]?.titles.find((t) => t.title === title);
-        if (!latestEntry) return null;
-        const prevEntry = weeks.length >= 2 ? catData[weeks[weeks.length - 2]]?.titles.find(t => t.title === title) : null;
-        
-        if (!prevEntry) return { indicator: "🆕", detail: "New this week" };
-        const diff = prevEntry.rank - latestEntry.rank;
-        if (diff > 0) return { indicator: "🔺", detail: `Up ${diff} spot${diff > 1 ? "s" : ""}` };
-        if (diff < 0) return { indicator: "🔻", detail: `Down ${Math.abs(diff)} spot${Math.abs(diff) > 1 ? "s" : ""}` };
-        return { indicator: "➖", detail: "No change" };
-    } catch { return null; }
-}
+
 
 async function fetchGlobalTitles(categoryType) {
     try {
@@ -199,7 +181,7 @@ async function fetchGlobalTitles(categoryType) {
             .slice(0, 10).map(([t]) => t);
     } catch { return []; }
 }
-async function matchTMDB(title, type, apiKey, rpdbApiKey, categoryType, country) {
+async function matchTMDB(title, type, apiKey, rpdbApiKey) {
     if (!apiKey) return null;
     try {
         const cleanTitle = title.replace(/: Season \d+/gi, "").replace(/ - Season \d+/gi, "").trim();
@@ -210,12 +192,7 @@ async function matchTMDB(title, type, apiKey, rpdbApiKey, categoryType, country)
                 const data = await res.json();
                 const matched = type === "tv" ? data.tv_results?.[0] : data.movie_results?.[0];
                 if (matched) {
-                    const meta = formatMeta(matched, TITLE_OVERRIDES[cleanTitle], type, rpdbApiKey);
-                    if (categoryType && country) {
-                        const trend = await getTrendForTitle(title, categoryType, country);
-                        if (trend) appendTrend(meta, trend);
-                    }
-                    return meta;
+                    return formatMeta(matched, TITLE_OVERRIDES[cleanTitle], type, rpdbApiKey);
                 }
             }
         }
@@ -248,21 +225,10 @@ async function matchTMDB(title, type, apiKey, rpdbApiKey, categoryType, country)
                 } catch {}
             }
             
-            const meta = formatMeta(best, finalId, type, rpdbApiKey);
-            if (categoryType && country) {
-                const trend = await getTrendForTitle(title, categoryType, country);
-                if (trend) appendTrend(meta, trend);
-            }
-            return meta;
+            return formatMeta(best, finalId, type, rpdbApiKey);
         }
     } catch {}
     return null;
-}
-
-function appendTrend(meta, trend) {
-    const orig = meta.releaseInfo || "";
-    meta.description = `${trend.indicator} ${trend.detail}\n\n${meta.description || ""}`;
-    meta.releaseInfo = `${trend.indicator} ${trend.detail.replace(/ this week| spots?/, "")}${orig ? " • " + orig : ""}`;
 }
 
 function formatMeta(item, finalId, type, rpdbApiKey) {
