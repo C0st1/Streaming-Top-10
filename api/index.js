@@ -400,8 +400,8 @@ async function buildConfigHTML(countries, latestWeek) {
         .field label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
         .field label .required-dot { width: 5px; height: 5px; background: var(--red); border-radius: 50%; }
         .field label .optional-tag { font-size: 10px; background: var(--surface2); border: 1px solid var(--border); padding: 1px 6px; border-radius: 3px; }
-        input[type="text"] { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 14px; padding: 12px 14px; outline: none; transition: 0.2s; }
-        input[type="text"]:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(229,9,20,0.15); }
+        input[type="text"], input[type="password"] { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 14px; padding: 12px 14px; outline: none; transition: 0.2s; }
+        input[type="text"]:focus, input[type="password"]:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(229,9,20,0.15); }
         .toggle-field { display: flex; align-items: center; gap: 10px; margin: 15px 0 20px; cursor: pointer; }
         .toggle-field label { font-size: 13px; cursor: pointer; font-weight: 500;}
         input[type="checkbox"] { appearance: none; background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; }
