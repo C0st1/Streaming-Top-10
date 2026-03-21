@@ -1,0 +1,13 @@
+{
+  "name": "netflix-top-10-stremio",
+  "version": "3.1.0",
+  "description": "Weekly updated Netflix Top 10 catalog for Stremio",
+  "main": "api/index.js",
+  "scripts": {
+    "start": "node api/index.js"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.x"
+  }
+}
