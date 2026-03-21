@@ -299,11 +299,13 @@ async function matchTMDB(title, type, apiKey, country = "Global") {
 
     const run = (async () => {
         try {
-            // Smart Regex Cleaning: Strips "Season X", "Limited Series", etc.
-            const cleanTitle = title.replace(/[:\-]?\s*(?:Season\s+\d+|Limited\s+Series|Part\s+\d+|Volume\s+\d+).*$/gi, "").trim();
+            // 1. Aggressive Cleaning: Removes Seasons, Parts, and "Limited Series"
+            const cleanTitle = title
+                .replace(/[:\-]?\s*(?:Season\s+\d+|Limited\s+Series|Part\s+\d+|Volume\s+\d+).*$/gi, "")
+                .trim();
             const cleanTitleLower = cleanTitle.toLowerCase();
             
-            // 1. Check Manual Overrides first
+            // 2. Manual Overrides
             if (TITLE_OVERRIDES[cleanTitleLower]) {
                 const res = await fetchWithTimeout(`https://api.themoviedb.org/3/find/${TITLE_OVERRIDES[cleanTitleLower]}?api_key=${apiKey}&external_source=imdb_id`);
                 if (res.ok) {
@@ -319,38 +321,39 @@ async function matchTMDB(title, type, apiKey, country = "Global") {
 
             const langCode = COUNTRY_LANG_MAP[country] || "en-US";
 
-            // Helper for Step 1 & 2
-            const searchTMDB = async (lang) => {
-                const sRes = await fetchWithTimeout(`https://api.themoviedb.org/3/search/${type}?api_key=${apiKey}&query=${encodeURIComponent(cleanTitle)}&language=${lang}&page=1`);
-                return sRes.ok ? (await sRes.json()).results : [];
+            // Search Helper
+            const search = async (lang) => {
+                const url = `https://api.themoviedb.org/3/search/${type}?api_key=${apiKey}&query=${encodeURIComponent(cleanTitle)}&language=${lang}&page=1`;
+                const r = await fetchWithTimeout(url);
+                return r.ok ? (await r.json()).results : [];
             };
 
-            // Step 1: Search using local language
-            let results = await searchTMDB(langCode);
+            // Step A: Search in Local Language
+            let results = await search(langCode);
 
-            // Step 2: Fallback to en-US if no results found locally
+            // Step B: Fallback to en-US if no results
             if ((!results || results.length === 0) && langCode !== "en-US") {
-                results = await searchTMDB("en-US");
+                results = await search("en-US");
             }
-            
+
             if (results && results.length > 0) {
-                // Filter for exact title matches
-                const exactMatches = results.filter(i => {
-                    const itemT = (type === "tv" ? i.name : i.title)?.toLowerCase();
-                    const origT = (type === "tv" ? i.original_name : i.original_title)?.toLowerCase();
-                    return itemT === cleanTitleLower || origT === cleanTitleLower;
+                // Filter for exact title matches to avoid "similar" titles
+                const exact = results.filter(i => {
+                    const name = (type === "tv" ? i.name : i.title)?.toLowerCase();
+                    const orig = (type === "tv" ? i.original_name : i.original_title)?.toLowerCase();
+                    return name === cleanTitleLower || orig === cleanTitleLower;
                 });
 
-                const candidates = exactMatches.length > 0 ? exactMatches : results.slice(0, 5);
+                const candidates = exact.length > 0 ? exact : results.slice(0, 3);
                 
-                // Step 3: Release Year Prioritization (Tie-breaker)
+                // Step C: Prioritize the most RECENT release (Netflix Top 10 is almost always new)
                 const best = candidates.sort((a,b) => {
                     const dateA = new Date(a.release_date || a.first_air_date || "1900-01-01");
                     const dateB = new Date(b.release_date || b.first_air_date || "1900-01-01");
-                    return dateB - dateA; // Prioritize newest
+                    return dateB - dateA;
                 })[0];
                 
-                // ... (Keep your existing IMDB ID fetching logic here) ...
+                // Get IMDB ID
                 let finalId = `tmdb:${best.id}`;
                 const cKey = getImdbCacheKey(type, best.id);
                 if (imdbCache.has(cKey)) finalId = imdbCache.get(cKey);
@@ -468,8 +471,8 @@ async function fetchCatalogFresh(cacheKey, type, catalogId, apiKey, multiCountri
 
     if (titles.length === 0) return [];
 
-    // Pass targetCountry so matchTMDB knows which language to use for the search
-   const metas = (await pMap(titles, (title) => matchTMDB(title, tmdbType, apiKey, targetCountry), 5))
+    // Passing 'targetCountry' allows the search to use the correct language map
+const metas = (await pMap(titles, (title) => matchTMDB(title, tmdbType, apiKey, targetCountry), 5))
         .filter(v => v !== null && v !== undefined);
     
     if (metas.length > 0) setCache(cacheKey, metas);
