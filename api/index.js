@@ -179,7 +179,7 @@ async function getAvailableCountries() {
     return list;
 }
 
-const TITLE_OVERRIDES = { "the race": "tt35052447" };
+const TITLE_OVERRIDES = {};
 const tmdbMatchCache = new Map();
 const TMDB_MATCH_CACHE_TTL = 6 * 60 * 60 * 1000;
 const tmdbMatchInFlight = new Map();
