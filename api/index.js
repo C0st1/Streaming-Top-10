@@ -418,9 +418,9 @@ async function buildConfigHTML(countries, latestWeek) {
         .toast.show { display: flex; animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
         @keyframes popIn { 0% { opacity: 0; transform: translateY(-10px) scale(0.95); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
         .input-with-icon { position: relative; display: flex; align-items: center; }
-        .input-with-icon input { padding-right: 60px; }
-        .toggle-pwd { position: absolute; right: 14px; background: transparent; border: none; font-size: 11px; font-weight: 700; font-family: 'DM Sans', sans-serif; cursor: pointer; color: #888; transition: 0.2s; letter-spacing: 0.5px; opacity: 1; outline: none; }
-        .toggle-pwd:hover { color: #fff; transform: scale(1.05); }
+        .input-with-icon input { padding-right: 48px; }
+        .toggle-pwd { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); background: transparent; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #888; transition: 0.2s; outline: none; }
+        .toggle-pwd:hover { color: #fff; transform: translateY(-50%) scale(1.1); }
         
         .field-row { display: flex; flex-direction: column; gap: 0; }
         
@@ -488,7 +488,9 @@ async function buildConfigHTML(countries, latestWeek) {
             </label>
             <div class="input-with-icon">
                 <input type="password" id="tmdbKey" placeholder="e.g. 8a7f3bc2d1...">
-                <button class="toggle-pwd" onclick="togglePwd('tmdbKey', this)" title="Show/Hide">SHOW</button>
+                <button class="toggle-pwd" onclick="togglePwd('tmdbKey', this)" title="Show/Hide">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                </button>
             </div>
             <div style="margin-top:6px;"><button class="btn btn-sm" id="testKeyBtn" onclick="testTmdbKey()">Test Key</button> <span id="keyStatus" class="key-status"></span></div>
         </div>
@@ -505,7 +507,9 @@ async function buildConfigHTML(countries, latestWeek) {
                     </label>
                     <div class="input-with-icon">
                         <input type="password" id="rpdbKey" placeholder="e.g. t1-xxxxxx...">
-                        <button class="toggle-pwd" onclick="togglePwd('rpdbKey', this)" title="Show/Hide">SHOW</button>
+                        <button class="toggle-pwd" onclick="togglePwd('rpdbKey', this)" title="Show/Hide">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                        </button>
                     </div>
                     <div style="margin-top:6px;"><button class="btn btn-sm" id="testRpdbBtn" onclick="testRpdbKey()">Test Format</button> <span id="rpdbStatus" class="key-status"></span></div>
                 </div>
@@ -728,10 +732,13 @@ async function buildConfigHTML(countries, latestWeek) {
         document.getElementById('resultArea').style.display = 'block';
     }
     
+    const eyeSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+    const eyeOffSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
+
     function togglePwd(id, btn) {
         const input = document.getElementById(id);
-        if (input.type === 'password') { input.type = 'text'; btn.textContent = 'HIDE'; }
-        else { input.type = 'password'; btn.textContent = 'SHOW'; }
+        if (input.type === 'password') { input.type = 'text'; btn.innerHTML = eyeOffSvg; }
+        else { input.type = 'password'; btn.innerHTML = eyeSvg; }
     }
 
     function copyLink() {
