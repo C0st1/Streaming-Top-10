@@ -255,13 +255,13 @@ function buildManifest(country = "Global", multiCountries = []) {
         if (c.toLowerCase() === "global") {
             catalogs.push(
                 { type: "movie", id: "netflix_top10_movies_global", name: "Netflix Top 10 (Global)" },
-                { type: "tv_shows", id: "netflix_top10_series_global", name: "Netflix Top 10 (Global)" }
+                { type: "TV Shows", id: "netflix_top10_series_global", name: "Netflix Top 10 (Global)" }
             );
         } else {
             const idSlug = toIdSlug(c);
             catalogs.push(
                 { type: "movie", id: `netflix_top10_movies_${idSlug}`, name: `Netflix Top 10 (${c})` },
-                { type: "tv_shows", id: `netflix_top10_series_${idSlug}`, name: `Netflix Top 10 (${c})` }
+                { type: "TV Shows", id: `netflix_top10_series_${idSlug}`, name: `Netflix Top 10 (${c})` }
             );
         }
     }
@@ -272,7 +272,7 @@ function buildManifest(country = "Global", multiCountries = []) {
         name: "Netflix Top 10",
         description: "Weekly updated Netflix Top 10 rankings per-country with precise Stremio catalogs.",
         logo: "https://img.icons8.com/color/256/netflix.png",
-        types: ["movie", "tv_shows"],
+        types: ["movie", "TV Shows"],
         catalogs,
         resources: ["catalog"],
         behaviorHints: { configurable: true },
@@ -568,11 +568,27 @@ async function buildConfigHTML(countries, latestWeek) {
     }
 
     (function restoreState() {
+        let s = {};
         try {
-            const s = JSON.parse(localStorage.getItem('nf_top10_config') || '{}');
+            const urlMatch = window.location.pathname.match(new RegExp('^/([^/]+)/configure$'));
+            if (urlMatch) {
+                const decoded = JSON.parse(decodeURIComponent(urlMatch[1]));
+                s = {
+                    tmdbKey: decoded.tmdbApiKey || "",
+                    rpdbKey: decoded.rpdbApiKey || "",
+                    countries: decoded.country ? decoded.country.split(",").map(c=>c.trim()) : []
+                };
+            } else {
+                s = JSON.parse(localStorage.getItem('nf_top10_config') || '{}');
+            }
+        } catch { 
+            try { s = JSON.parse(localStorage.getItem('nf_top10_config') || '{}'); } catch {}
+        }
+        
+        try {
             if (s.tmdbKey) document.getElementById('tmdbKey').value = s.tmdbKey;
             if (s.rpdbKey) document.getElementById('rpdbKey').value = s.rpdbKey;
-            if (s.countries?.length) s.countries.forEach(addCountry); else addCountry('Global');
+            if (s.countries && s.countries.length > 0) s.countries.forEach(c => addCountry(c)); else addCountry('Global');
         } catch { addCountry('Global'); }
     })();
 
@@ -634,7 +650,7 @@ module.exports = async (req, res) => {
     if (path.startsWith('/api/index.js')) path = path.replace('/api/index.js', '');
     if (path === "") path = "/";
 
-    if (path === "/" || path === "/configure") {
+    if (path === "/" || path === "/configure" || path.endsWith("/configure")) {
         return res.status(200).setHeader("Content-Type", "text/html;charset=UTF-8").send(await buildConfigHTML(await getAvailableCountries(), await getLatestWeekDate()));
     }
 
@@ -657,11 +673,11 @@ module.exports = async (req, res) => {
         return res.status(200).setHeader("Content-Type", "application/json").json(buildManifest(cc, mcs));
     }
 
-    const match = path.match(/^\/(.*?)\/catalog\/(movie|series|tv_shows)\/([^/.]+)(?:\.json)?$/);
+    const match = path.match(/^\/(.*?)\/catalog\/(movie|series|TV%20Shows|TV Shows)\/([^/.]+)(?:\.json)?$/);
     if (match) {
         const config = parseConfig(match[1]);
         if (!config) return res.status(400).json({ error: "Missing/Invalid config" });
-        const catalogType = match[2] === "tv_shows" ? "series" : match[2];
+        const catalogType = (match[2] === "TV Shows" || match[2] === "TV%20Shows") ? "series" : match[2];
         const metas = await buildCatalog(catalogType, match[3], config.tmdbApiKey, config.rpdbApiKey, config.country, config.multiCountries);
         return res.status(200).setHeader("Content-Type", "application/json").json({ metas });
     }
