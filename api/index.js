@@ -425,8 +425,10 @@ async function buildConfigHTML(countries, latestWeek) {
         .field-row { display: flex; flex-direction: column; gap: 0; }
         
         .tooltip-container { position: relative; display: inline-block; margin-left: 6px; }
-        .tooltip-icon { background: rgba(255,255,255,0.1); color: #aaa; border-radius: 50%; width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; cursor: help; text-decoration: none; }
+        .tooltip-icon { background: rgba(255,255,255,0.1); color: #aaa; border-radius: 50%; width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; cursor: help; text-decoration: none; transition: 0.2s; }
         .tooltip-container:hover .tooltip-icon { background: rgba(255,255,255,0.2); color: #fff; }
+        a.tooltip-icon { cursor: pointer; }
+        a.tooltip-icon:hover { background: var(--red); color: #fff; transform: scale(1.15); box-shadow: 0 0 10px rgba(229,9,20,0.4); }
         .tooltip-content { visibility: hidden; opacity: 0; position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(100% + 8px); background: #222; color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 12px; white-space: nowrap; z-index: 100; font-weight: normal; text-transform: none; line-height: 1.4; box-shadow: 0 4px 12px rgba(0,0,0,0.5); transition: 0.15s; pointer-events: none; border: 1px solid #333; }
         .tooltip-content a { color: #5c9eff; text-decoration: none; pointer-events: auto; font-weight: bold; }
         .tooltip-content a:hover { text-decoration: underline; }
