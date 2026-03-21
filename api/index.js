@@ -418,9 +418,9 @@ async function buildConfigHTML(countries, latestWeek) {
         .toast.show { display: flex; animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
         @keyframes popIn { 0% { opacity: 0; transform: translateY(-10px) scale(0.95); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
         .input-with-icon { position: relative; display: flex; align-items: center; }
-        .input-with-icon input { padding-right: 40px; }
-        .toggle-pwd { position: absolute; right: 10px; background: transparent; border: none; font-size: 16px; cursor: pointer; opacity: 0.6; padding: 0; transition: 0.2s; }
-        .toggle-pwd:hover { opacity: 1; transform: scale(1.1); }
+        .input-with-icon input { padding-right: 60px; }
+        .toggle-pwd { position: absolute; right: 14px; background: transparent; border: none; font-size: 11px; font-weight: 700; font-family: 'DM Sans', sans-serif; cursor: pointer; color: #888; transition: 0.2s; letter-spacing: 0.5px; opacity: 1; outline: none; }
+        .toggle-pwd:hover { color: #fff; transform: scale(1.05); }
         
         .field-row { display: flex; flex-direction: column; gap: 0; }
         
@@ -488,7 +488,7 @@ async function buildConfigHTML(countries, latestWeek) {
             </label>
             <div class="input-with-icon">
                 <input type="password" id="tmdbKey" placeholder="e.g. 8a7f3bc2d1...">
-                <button class="toggle-pwd" onclick="togglePwd('tmdbKey', this)" title="Show/Hide">👁️</button>
+                <button class="toggle-pwd" onclick="togglePwd('tmdbKey', this)" title="Show/Hide">SHOW</button>
             </div>
             <div style="margin-top:6px;"><button class="btn btn-sm" id="testKeyBtn" onclick="testTmdbKey()">Test Key</button> <span id="keyStatus" class="key-status"></span></div>
         </div>
@@ -505,7 +505,7 @@ async function buildConfigHTML(countries, latestWeek) {
                     </label>
                     <div class="input-with-icon">
                         <input type="password" id="rpdbKey" placeholder="e.g. t1-xxxxxx...">
-                        <button class="toggle-pwd" onclick="togglePwd('rpdbKey', this)" title="Show/Hide">👁️</button>
+                        <button class="toggle-pwd" onclick="togglePwd('rpdbKey', this)" title="Show/Hide">SHOW</button>
                     </div>
                     <div style="margin-top:6px;"><button class="btn btn-sm" id="testRpdbBtn" onclick="testRpdbKey()">Test Format</button> <span id="rpdbStatus" class="key-status"></span></div>
                 </div>
@@ -562,8 +562,7 @@ async function buildConfigHTML(countries, latestWeek) {
                     if (!isSelected) { 
                         addCountry(c); 
                         searchInput.value = ''; 
-                        renderDropdown(''); 
-                        searchInput.focus(); 
+                        dropdown.classList.remove('open');
                     }
                 };
                 dropdown.appendChild(item);
