@@ -243,7 +243,7 @@ async function fetchGlobalTitles(categoryType) {
         return parsed.globalTitles[categoryType] || [];
     } catch { return []; }
 }
-async function matchTMDB(title, type, apiKey) {
+async function matchTMDB(title, type, apiKey, yearHint) {
     if (!apiKey) return null;
     const cacheKey = getTmdbMatchCacheKey(title, type);
     const cached = getCachedTmdbMatch(cacheKey);
@@ -252,8 +252,16 @@ async function matchTMDB(title, type, apiKey) {
 
     const run = (async () => {
     try {
-        const cleanTitle = title.replace(/[:\-]?\s*Season\s+\d+/gi, "").trim();
+        // Strip "Season X" and parenthetical subtitles like "(Cursa)" or "(La Course)"
+        // but preserve year-in-parens like "(2025)" as a year hint
+        let yearFromTitle = null;
+        const cleanTitle = title
+            .replace(/[:\-]?\s*Season\s+\d+/gi, "")
+            .replace(/\s*\((\d{4})\)/g, (_, y) => { yearFromTitle = parseInt(y, 10); return ""; })
+            .replace(/\s*\([^)]{1,40}\)$/g, "") // strip trailing parenthetical subtitle
+            .trim();
         const cleanTitleLower = cleanTitle.toLowerCase();
+        const effectiveYear = yearFromTitle || yearHint || null;
         
         if (TITLE_OVERRIDES[cleanTitleLower]) {
             const res = await fetchWithTimeout(`https://api.themoviedb.org/3/find/${TITLE_OVERRIDES[cleanTitleLower]}?api_key=${apiKey}&external_source=imdb_id`);
@@ -269,9 +277,23 @@ async function matchTMDB(title, type, apiKey) {
             }
         }
 
-        const sRes = await fetchWithTimeout(`https://api.themoviedb.org/3/search/${type}?api_key=${apiKey}&query=${encodeURIComponent(cleanTitle)}&language=en-US&page=1`);
+        // Build search URL; if we have a year hint, include it to narrow results
+        let searchUrl = `https://api.themoviedb.org/3/search/${type}?api_key=${apiKey}&query=${encodeURIComponent(cleanTitle)}&language=en-US&page=1`;
+        if (effectiveYear) {
+            const yearParam = type === "movie" ? "primary_release_year" : "first_air_date_year";
+            searchUrl += `&${yearParam}=${effectiveYear}`;
+        }
+
+        let sRes = await fetchWithTimeout(searchUrl);
         if (!sRes.ok) throw new Error("TMDB Search Failed");
-        const sData = await sRes.json();
+        let sData = await sRes.json();
+
+        // If year-filtered search returned nothing, fall back to unfiltered
+        if (effectiveYear && (!sData.results || sData.results.length === 0)) {
+            const fallbackUrl = `https://api.themoviedb.org/3/search/${type}?api_key=${apiKey}&query=${encodeURIComponent(cleanTitle)}&language=en-US&page=1`;
+            sRes = await fetchWithTimeout(fallbackUrl);
+            if (sRes.ok) sData = await sRes.json();
+        }
         
         if (sData.results?.length > 0) {
             const candidates = sData.results.slice(0, 5);
@@ -280,7 +302,23 @@ async function matchTMDB(title, type, apiKey) {
                 const origT = (type === "tv" ? i.original_name : i.original_title)?.toLowerCase();
                 return itemT === cleanTitleLower || origT === cleanTitleLower;
             });
-            const best = exact.length > 0 ? exact.sort((a,b) => new Date(b.release_date||b.first_air_date||"1900-01-01") - new Date(a.release_date||a.first_air_date||"1900-01-01"))[0] : candidates[0];
+
+            let pool = exact.length > 0 ? exact : candidates;
+
+            // If we have a year hint, prefer the result whose release year is closest
+            let best;
+            if (effectiveYear && pool.length > 1) {
+                best = pool.sort((a, b) => {
+                    const yearA = parseInt((a.release_date || a.first_air_date || "1900").substring(0, 4), 10);
+                    const yearB = parseInt((b.release_date || b.first_air_date || "1900").substring(0, 4), 10);
+                    return Math.abs(yearA - effectiveYear) - Math.abs(yearB - effectiveYear);
+                })[0];
+            } else {
+                // Original tie-breaker: most recent among exact matches, or first candidate
+                best = exact.length > 0
+                    ? exact.sort((a, b) => new Date(b.release_date || b.first_air_date || "1900-01-01") - new Date(a.release_date || a.first_air_date || "1900-01-01"))[0]
+                    : candidates[0];
+            }
             
             let finalId = `tmdb:${best.id}`;
             const cKey = getImdbCacheKey(type, best.id);
@@ -407,7 +445,17 @@ async function fetchCatalogFresh(cacheKey, type, catalogId, apiKey, multiCountri
 
     if (titles.length === 0) return [];
 
-    const metas = (await pMap(titles, (title) => matchTMDB(title, tmdbType, apiKey), 5))
+    // Derive a year hint from the Netflix week date to help disambiguate same-named titles
+    const parsedForYear = await getParsedTSV();
+    let weekYear = null;
+    if (!isGlobal && targetCountry) {
+        const catData = parsedForYear.data[targetCountry]?.[categoryType];
+        if (catData?.latestWeek) weekYear = parseInt(catData.latestWeek.substring(0, 4), 10) || null;
+    } else {
+        weekYear = parseInt((parsedForYear.globalLatestWeek || "").substring(0, 4), 10) || null;
+    }
+
+    const metas = (await pMap(titles, (title) => matchTMDB(title, tmdbType, apiKey, weekYear), 5))
         .filter(v => v !== null && v !== undefined);
     
     if (metas.length > 0) setCache(cacheKey, metas);
