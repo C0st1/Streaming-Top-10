@@ -421,6 +421,15 @@ async function buildConfigHTML(countries, latestWeek) {
         .input-with-icon input { padding-right: 40px; }
         .toggle-pwd { position: absolute; right: 10px; background: transparent; border: none; font-size: 16px; cursor: pointer; opacity: 0.6; padding: 0; transition: 0.2s; }
         .toggle-pwd:hover { opacity: 1; transform: scale(1.1); }
+        
+        .field-row { display: flex; flex-direction: column; gap: 0; }
+        @media (min-width: 800px) {
+            .card { max-width: 900px; display: flex; flex-direction: row; }
+            .card-header { width: 360px; border-bottom: none; border-right: 1px solid var(--border); padding: 48px; display: flex; flex-direction: column; justify-content: center; }
+            .card-body { flex: 1; padding: 48px; }
+            .field-row { flex-direction: row; gap: 20px; margin-bottom: 20px; }
+            .field-row .field { flex: 1; margin-bottom: 0; }
+        }
     </style>
 </head>
 <body>
@@ -441,30 +450,32 @@ async function buildConfigHTML(countries, latestWeek) {
             <div class="multi-countries" id="selectedCountries"></div>
             <p class="hint">Click or search to select. <b>Drag to re-order</b> which catalogs appear first in Stremio.</p>
         </div>
-        <div class="field">
-            <label><span class="required-dot"></span> TMDB API Key</label>
-            <div class="input-with-icon">
-                <input type="password" id="tmdbKey" placeholder="e.g. 8a7f3bc2d1...">
-                <button class="toggle-pwd" onclick="togglePwd('tmdbKey', this)" title="Show/Hide">👁️</button>
+        <div class="field-row">
+            <div class="field">
+                <label><span class="required-dot"></span> TMDB API Key</label>
+                <div class="input-with-icon">
+                    <input type="password" id="tmdbKey" placeholder="e.g. 8a7f3bc2d1...">
+                    <button class="toggle-pwd" onclick="togglePwd('tmdbKey', this)" title="Show/Hide">👁️</button>
+                </div>
+                <p class="hint" style="margin-bottom:8px;">Required for Stremio metadata. Get yours free at <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org</a>.</p>
+                <button class="btn btn-sm" id="testKeyBtn" onclick="testTmdbKey()">Test Key</button> <span id="keyStatus" class="key-status"></span>
             </div>
-            <p class="hint" style="margin-bottom:8px;">Required for Stremio metadata. Get yours free at <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org</a>.</p>
-            <button class="btn btn-sm" id="testKeyBtn" onclick="testTmdbKey()">Test Key</button> <span id="keyStatus" class="key-status"></span>
-        </div>
-        <div class="field">
-            <label>RPDB API Key <span class="optional-tag">optional</span></label>
-            <div class="input-with-icon">
-                <input type="password" id="rpdbKey" placeholder="e.g. t1-xxxxxx...">
-                <button class="toggle-pwd" onclick="togglePwd('rpdbKey', this)" title="Show/Hide">👁️</button>
+            <div class="field">
+                <label>RPDB API Key <span class="optional-tag">optional</span></label>
+                <div class="input-with-icon">
+                    <input type="password" id="rpdbKey" placeholder="e.g. t1-xxxxxx...">
+                    <button class="toggle-pwd" onclick="togglePwd('rpdbKey', this)" title="Show/Hide">👁️</button>
+                </div>
+                <p class="hint">Adds Netflix-style rating overlays to posters. Get a key at <a href="https://ratingposterdb.com/" target="_blank">ratingposterdb.com</a>.</p>
             </div>
-            <p class="hint">Adds Netflix-style rating overlays to posters. Get a key at <a href="https://ratingposterdb.com/" target="_blank">ratingposterdb.com</a>.</p>
         </div>
         <div class="field" style="margin-bottom: 24px;">
             <label>Catalog Tab Overrides <span class="optional-tag">optional</span></label>
-            <div style="display:flex; gap:10px;">
+            <div class="field-row" style="margin-bottom:0; gap:10px;">
                 <input type="text" id="movieOverride" placeholder="Movie Tab Name (e.g. Films)">
                 <input type="text" id="seriesOverride" placeholder="Series Tab Name (e.g. TV Shows)">
             </div>
-            <p class="hint">Isolate Netflix content into customizable Discover tabs. Leave empty to embed in Stremio's native categories.</p>
+            <p class="hint" style="margin-top:10px;">Isolate Netflix content into customizable Discover tabs. Leave empty to embed in Stremio's native categories.</p>
         </div>
 
         <button class="btn btn-primary" id="generateBtn" onclick="generateLink()">Generate Install Link</button>
