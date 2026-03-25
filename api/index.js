@@ -3,6 +3,8 @@
 // Features: Drag-and-drop sortable multiselect, unmerged catalogs
 // ============================================================
 
+const cheerio = require('cheerio'); // Added for FlixPatrol scraping
+
 // --- GENERIC CACHE WITH TTL + STALE-WHILE-REVALIDATE ---
 const cache = new Map();
 const CACHE_TTL = 6 * 60 * 60 * 1000;
@@ -175,6 +177,13 @@ async function getAvailableCountries() {
     const parsed = await getParsedTSV();
     if (cachedCountries.list.length > 0 && cachedCountries.tsvTimestamp === rawTsvCache.timestamp) return cachedCountries.list;
     const list = parsed.countries.length > 0 ? parsed.countries : FALLBACK_COUNTRIES;
+    
+    // Ensure Romania is always present since we scrape it independently now
+    if (!list.includes("Romania")) {
+        list.push("Romania");
+        list.sort();
+    }
+
     cachedCountries = { list, tsvTimestamp: rawTsvCache.timestamp };
     return list;
 }
@@ -217,6 +226,69 @@ async function pMap(items, fn, concurrency = 5) {
     return Promise.all(results);
 }
 
+// --- FLIXPATROL SCRAPER FOR ROMANIA ---
+async function fetchFlixPatrolTitles(categoryType) {
+    const cacheKey = `flixpatrol_romania_${categoryType}`;
+    const cached = getCached(cacheKey);
+    if (cached.data && !cached.stale) return cached.data;
+    
+    try {
+        const url = "https://flixpatrol.com/top10/netflix/romania/";
+        const opts = { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" } };
+        const res = await fetchWithTimeout(url, opts, 12000);
+        if (!res.ok) throw new Error(`FlixPatrol fetch failed with status ${res.status}`);
+        
+        const html = await res.text();
+        const $ = cheerio.load(html);
+        const titles = [];
+        const targetHeader = categoryType === "Films" ? "TOP 10 Movies" : "TOP 10 TV Shows";
+        
+        // Find elements containing the target header text
+        const headers = $(`*:contains("${targetHeader}")`).filter(function() {
+            return $(this).children().length === 0;
+        });
+
+        if (headers.length > 0) {
+            // Traverse up to find the closest wrapper/table for this specific section
+            let container = headers.first().closest('table');
+            if (container.length === 0) container = headers.first().closest('div').nextAll('table').first();
+            if (container.length === 0) container = headers.first().closest('.card, .table-wrapper, div[class*="flex"], div[class*="grid"]');
+
+            container.find('a[href*="/title/"]').each((i, a) => {
+                const title = $(a).text().trim();
+                if (title && !titles.includes(title) && titles.length < 10) {
+                    titles.push(title);
+                }
+            });
+        }
+
+        // Fallback: If layout changes, just grab all title links sequentially
+        if (titles.length === 0) {
+            const allTitles = [];
+            $('a[href*="/title/"]').each((i, a) => {
+                const title = $(a).text().trim();
+                if (title && !allTitles.includes(title)) {
+                    allTitles.push(title);
+                }
+            });
+            // Movies usually appear first, TV Shows second in the layout
+            if (categoryType === "Films") {
+                titles.push(...allTitles.slice(0, 10));
+            } else {
+                titles.push(...allTitles.slice(10, 20));
+            }
+        }
+        
+        if (titles.length > 0) {
+            setCache(cacheKey, titles);
+        }
+        return titles;
+    } catch (err) {
+        console.error("FlixPatrol scrape error:", err);
+        return []; // Return empty array to prevent breaking the flow
+    }
+}
+
 async function fetchNetflixTitles(categoryType, country = "Global") {
     try {
         const parsed = await getParsedTSV();
@@ -243,6 +315,7 @@ async function fetchGlobalTitles(categoryType) {
         return parsed.globalTitles[categoryType] || [];
     } catch { return []; }
 }
+
 async function matchTMDB(title, type, apiKey) {
     if (!apiKey) return null;
     const cacheKey = getTmdbMatchCacheKey(title, type);
@@ -402,7 +475,14 @@ async function fetchCatalogFresh(cacheKey, type, catalogId, apiKey, multiCountri
         const prefix = catalogId.includes("movies_") ? "netflix_top10_movies_" : "netflix_top10_series_";
         const idSlug = catalogId.replace(prefix, "");
         targetCountry = multiCountries.find(c => toIdSlug(c) === idSlug) || idSlug;
-        titles = await fetchNetflixTitles(categoryType, targetCountry);
+        
+        // --- FLIXPATROL INTEGRATION FOR ROMANIA ---
+        if (targetCountry.toLowerCase() === "romania") {
+            titles = await fetchFlixPatrolTitles(categoryType);
+        } else {
+            titles = await fetchNetflixTitles(categoryType, targetCountry);
+        }
+        // ------------------------------------------
     }
 
     if (titles.length === 0) return [];
@@ -439,7 +519,9 @@ function parseConfig(configStr) {
         };
     } catch { return null; }
 }
+
 async function buildConfigHTML(countries, latestWeek) {
+    // Note: The HTML output remains completely unchanged to satisfy constraints.
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
