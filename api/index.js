@@ -1,9 +1,10 @@
 // ============================================================
-// Netflix Top 10 — Stremio Addon (Vercel / Node.js) — v3.2
+// Netflix Top 10 — Stremio Addon (Vercel / Node.js) — v3.3
 // Features: Drag-and-drop sortable multiselect, unmerged catalogs
+// Now powered entirely by FlixPatrol live scraping
 // ============================================================
 
-const cheerio = require('cheerio'); // Added for FlixPatrol scraping
+const cheerio = require('cheerio');
 
 // --- GENERIC CACHE WITH TTL + STALE-WHILE-REVALIDATE ---
 const cache = new Map();
@@ -23,10 +24,6 @@ function enforceCacheLimit(map, limit = 500) {
 function setCache(key, data) {
     cache.set(key, { data, timestamp: Date.now() });
     enforceCacheLimit(cache, 1000);
-}
-
-function getCacheSize() {
-    return cache.size;
 }
 
 // --- IMDB ID CACHE ---
@@ -49,191 +46,45 @@ function getImdbCacheKey(type, tmdbId) {
     return `${type}_${tmdbId}`;
 }
 
-// --- TSV STRUCTURED CACHE ---
-let parsedTsvCache = { parsed: null, tsvTimestamp: 0 };
-let rawTsvCache = { data: "", timestamp: 0 };
-const TSV_CACHE_TTL = 12 * 60 * 60 * 1000;
-let rawTsvFetchPromise = null;
-
-function getTsvTimestamp() {
-    return rawTsvCache.timestamp;
-}
-
-async function fetchRawTSV() {
-    if (rawTsvCache.data && Date.now() - rawTsvCache.timestamp < TSV_CACHE_TTL) {
-        return rawTsvCache.data;
-    }
-    if (rawTsvFetchPromise) return rawTsvFetchPromise;
-    rawTsvFetchPromise = (async () => {
-        try {
-            const url = "https://www.netflix.com/tudum/top10/data/all-weeks-countries.tsv";
-            const headers = { "User-Agent": "Mozilla/5.0" };
-            if (rawTsvCache.timestamp) headers["If-Modified-Since"] = new Date(rawTsvCache.timestamp).toUTCString();
-            const response = await fetchWithTimeout(url, { headers }, 12000);
-            if (response.status === 304) {
-                rawTsvCache.timestamp = Date.now();
-                return rawTsvCache.data;
-            }
-            if (!response.ok) return rawTsvCache.data || "";
-            const data = await response.text();
-            rawTsvCache = { data, timestamp: Date.now() };
-            parsedTsvCache = { parsed: null, tsvTimestamp: 0 };
-            return data;
-        } catch {
-            return rawTsvCache.data || "";
-        } finally {
-            rawTsvFetchPromise = null;
-        }
-    })();
-    return rawTsvFetchPromise;
-}
-
-function parseTSV(raw) {
-    const lines = raw.split("\n");
-    if (lines.length < 2) return { countries: [], data: {}, globalLatestWeek: "" };
-
-    const headers = lines[0].split("\t").map((h) => h.trim().toLowerCase());
-    const ci = Math.max(0, headers.indexOf("country_name"));
-    const wi = Math.max(2, headers.indexOf("week"));
-    const cati = Math.max(3, headers.indexOf("category"));
-    const ri = Math.max(4, headers.indexOf("weekly_rank"));
-    const ti = Math.max(5, headers.indexOf("show_title"));
-
-    const minCols = Math.max(ci, wi, cati, ri, ti) + 1;
-    const countriesSet = new Set();
-    const data = {};
-    let globalLatestWeek = "";
-
-    for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split("\t");
-        if (cols.length < minCols) continue;
-
-        const country = cols[ci].trim();
-        const week = cols[wi].trim();
-        const category = cols[cati].trim();
-        const rank = parseInt(cols[ri]?.trim(), 10) || 99;
-        const title = cols[ti].trim();
-
-        if (!country || !week || !category || !title) continue;
-
-        countriesSet.add(country);
-        if (!data[country]) data[country] = {};
-        if (!data[country][category]) data[country][category] = {};
-        
-        const catData = data[country][category];
-        if (!catData.latestWeek || week > catData.latestWeek) {
-            catData.latestWeek = week;
-            catData[week] = { titles: [] };
-            for (const oldWeek in catData) {
-                if (oldWeek !== 'latestWeek' && oldWeek !== week) delete catData[oldWeek];
-            }
-        }
-        if (week === catData.latestWeek) {
-            catData[week].titles.push({ title, rank });
-        }
-        
-        if (week > globalLatestWeek) globalLatestWeek = week;
-    }
-
-    const globalTitles = { "Films": new Map(), "TV": new Map() };
-    for (const c in data) {
-        for (const cat in data[c]) {
-            const lw = data[c][cat].latestWeek;
-            if (!lw || !data[c][cat][lw]) continue;
-            data[c][cat][lw].titles.sort((a,b) => a.rank - b.rank);
-            
-            const gMap = globalTitles[cat];
-            if (gMap) {
-                for (const t of data[c][cat][lw].titles) {
-                    const ex = gMap.get(t.title) || { count: 0, rankSum: 0 };
-                    ex.count++; ex.rankSum += t.rank;
-                    gMap.set(t.title, ex);
-                }
-            }
-        }
-    }
-    
-    const precomputedGlobals = {
-        "Films": [...globalTitles["Films"].entries()].sort((a, b) => b[1].count - a[1].count || a[1].rankSum / a[1].count - b[1].rankSum / b[1].count).slice(0, 10).map(([t]) => t),
-        "TV": [...globalTitles["TV"].entries()].sort((a, b) => b[1].count - a[1].count || a[1].rankSum / a[1].count - b[1].rankSum / b[1].count).slice(0, 10).map(([t]) => t)
-    };
-
-    return { countries: [...countriesSet].sort(), data, globalLatestWeek, globalTitles: precomputedGlobals };
-}
-
-async function getParsedTSV() {
-    const raw = await fetchRawTSV();
-    if (!raw) return parsedTsvCache.parsed || { countries: [], data: {}, globalLatestWeek: "", globalTitles: {} };
-    if (!parsedTsvCache.parsed || parsedTsvCache.tsvTimestamp !== rawTsvCache.timestamp) {
-        parsedTsvCache = { parsed: parseTSV(raw), tsvTimestamp: rawTsvCache.timestamp };
-    }
-    return parsedTsvCache.parsed;
-}
-
-let cachedCountries = { list: [], tsvTimestamp: 0 };
-const FALLBACK_COUNTRIES = ["Argentina", "Australia", "Brazil", "Canada", "France", "Germany", "India", "Italy", "Japan", "Mexico", "Romania", "South Korea", "Spain", "United Kingdom", "United States"];
+// --- SUPPORTED COUNTRIES (FlixPatrol) ---
+const FLIXPATROL_COUNTRIES = [
+    "Global", // Replaces "Worldwide" for UI consistency
+    "Argentina", "Australia", "Austria", "Bahamas", "Bahrain", "Bangladesh", "Belgium", 
+    "Bolivia", "Brazil", "Bulgaria", "Canada", "Chile", "Colombia", "Costa Rica", 
+    "Croatia", "Cyprus", "Czech Republic", "Denmark", "Dominican Republic", "Ecuador", 
+    "Egypt", "Estonia", "Finland", "France", "Germany", "Greece", "Guadeloupe", 
+    "Guatemala", "Honduras", "Hong-Kong", "Hungary", "Iceland", "India", "Indonesia", 
+    "Ireland", "Israel", "Italy", "Jamaica", "Japan", "Jordan", "Kenya", "Kuwait", 
+    "Latvia", "Lebanon", "Lithuania", "Luxembourg", "Malaysia", "Maldives", "Malta", 
+    "Martinique", "Mauritius", "Mexico", "Morocco", "Netherlands", "New Caledonia", 
+    "New Zealand", "Nicaragua", "Nigeria", "Norway", "Oman", "Pakistan", "Panama", 
+    "Paraguay", "Peru", "Philippines", "Poland", "Portugal", "Qatar", "Reunion", 
+    "Romania", "Salvador", "Saudi Arabia", "Serbia", "Singapore", "Slovakia", 
+    "Slovenia", "South Africa", "South Korea", "Spain", "Sri Lanka", "Sweden", 
+    "Switzerland", "Taiwan", "Thailand", "Trinidad and Tobago", "Turkey", "Ukraine", 
+    "United Arab Emirates", "United Kingdom", "United States", "Uruguay", "Venezuela", "Vietnam"
+];
 
 async function getAvailableCountries() {
-    const parsed = await getParsedTSV();
-    if (cachedCountries.list.length > 0 && cachedCountries.tsvTimestamp === rawTsvCache.timestamp) return cachedCountries.list;
-    const list = parsed.countries.length > 0 ? parsed.countries : FALLBACK_COUNTRIES;
-    
-    // Ensure Romania is always present since we scrape it independently now
-    if (!list.includes("Romania")) {
-        list.push("Romania");
-        list.sort();
-    }
-
-    cachedCountries = { list, tsvTimestamp: rawTsvCache.timestamp };
-    return list;
+    return FLIXPATROL_COUNTRIES;
 }
 
-const TITLE_OVERRIDES = { "the race": "tt35052447" };
-const tmdbMatchCache = new Map();
-const TMDB_MATCH_CACHE_TTL = 6 * 60 * 60 * 1000;
-const tmdbMatchInFlight = new Map();
-
-function getTmdbMatchCacheKey(title, type) {
-    return `${type}|${title.toLowerCase()}`;
+function getFlixPatrolSlug(country) {
+    if (!country) return "world";
+    const lower = country.toLowerCase();
+    if (lower === "global" || lower === "worldwide") return "world";
+    return lower.replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 }
 
-function getCachedTmdbMatch(cacheKey) {
-    const hit = tmdbMatchCache.get(cacheKey);
-    if (!hit) return undefined;
-    if (Date.now() - hit.timestamp > TMDB_MATCH_CACHE_TTL) {
-        tmdbMatchCache.delete(cacheKey);
-        return undefined;
-    }
-    return hit.value;
-}
-
-function getRpdbPosterUrl(imdbId, rpdbApiKey) {
-    if (!rpdbApiKey || !imdbId || !imdbId.startsWith("tt")) return null;
-    return `https://api.ratingposterdb.com/${rpdbApiKey}/imdb/poster-default/${imdbId}.jpg`;
-}
-
-async function pMap(items, fn, concurrency = 5) {
-    const results = [];
-    const executing = new Set();
-    for (const item of items) {
-        const p = Promise.resolve().then(() => fn(item));
-        results.push(p);
-        executing.add(p);
-        const clean = () => executing.delete(p);
-        p.then(clean).catch(clean);
-        if (executing.size >= concurrency) await Promise.race(executing);
-    }
-    return Promise.all(results);
-}
-
-// --- FLIXPATROL SCRAPER FOR ROMANIA ---
-async function fetchFlixPatrolTitles(categoryType) {
-    const cacheKey = `flixpatrol_romania_${categoryType}`;
+// --- FLIXPATROL SCRAPER (Multi-Region) ---
+async function fetchFlixPatrolTitles(categoryType, country = "Global") {
+    const slug = getFlixPatrolSlug(country);
+    const cacheKey = `flixpatrol_${slug}_${categoryType}`;
     const cached = getCached(cacheKey);
     if (cached.data && !cached.stale) return cached.data;
     
     try {
-        const url = "https://flixpatrol.com/top10/netflix/romania/";
+        const url = `https://flixpatrol.com/top10/netflix/${slug}/`;
         const opts = { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" } };
         const res = await fetchWithTimeout(url, opts, 12000);
         if (!res.ok) throw new Error(`FlixPatrol fetch failed with status ${res.status}`);
@@ -284,36 +135,48 @@ async function fetchFlixPatrolTitles(categoryType) {
         }
         return titles;
     } catch (err) {
-        console.error("FlixPatrol scrape error:", err);
-        return []; // Return empty array to prevent breaking the flow
+        console.error(`FlixPatrol scrape error for ${country}:`, err);
+        return [];
     }
 }
 
-async function fetchNetflixTitles(categoryType, country = "Global") {
-    try {
-        const parsed = await getParsedTSV();
-        if (!parsed.data[country] || !parsed.data[country][categoryType]) return [];
-        const catData = parsed.data[country][categoryType];
-        if (!catData.latestWeek || !catData[catData.latestWeek]) return [];
-        
-        const entries = catData[catData.latestWeek].titles;
-        const seen = new Set();
-        const result = [];
-        for (const e of entries) {
-            if (!seen.has(e.title) && result.length < 10) {
-                seen.add(e.title);
-                result.push(e.title);
-            }
-        }
-        return result;
-    } catch { return []; }
+// --- TMDB METADATA MATCHER ---
+const TITLE_OVERRIDES = { "the race": "tt35052447" };
+const tmdbMatchCache = new Map();
+const TMDB_MATCH_CACHE_TTL = 6 * 60 * 60 * 1000;
+const tmdbMatchInFlight = new Map();
+
+function getTmdbMatchCacheKey(title, type) {
+    return `${type}|${title.toLowerCase()}`;
 }
 
-async function fetchGlobalTitles(categoryType) {
-    try {
-        const parsed = await getParsedTSV();
-        return parsed.globalTitles[categoryType] || [];
-    } catch { return []; }
+function getCachedTmdbMatch(cacheKey) {
+    const hit = tmdbMatchCache.get(cacheKey);
+    if (!hit) return undefined;
+    if (Date.now() - hit.timestamp > TMDB_MATCH_CACHE_TTL) {
+        tmdbMatchCache.delete(cacheKey);
+        return undefined;
+    }
+    return hit.value;
+}
+
+function getRpdbPosterUrl(imdbId, rpdbApiKey) {
+    if (!rpdbApiKey || !imdbId || !imdbId.startsWith("tt")) return null;
+    return `https://api.ratingposterdb.com/${rpdbApiKey}/imdb/poster-default/${imdbId}.jpg`;
+}
+
+async function pMap(items, fn, concurrency = 5) {
+    const results = [];
+    const executing = new Set();
+    for (const item of items) {
+        const p = Promise.resolve().then(() => fn(item));
+        results.push(p);
+        executing.add(p);
+        const clean = () => executing.delete(p);
+        p.then(clean).catch(clean);
+        if (executing.size >= concurrency) await Promise.race(executing);
+    }
+    return Promise.all(results);
 }
 
 async function matchTMDB(title, type, apiKey) {
@@ -428,7 +291,7 @@ function buildManifest(country = "Global", multiCountries = [], movieType = "mov
 
     return {
         id: "org.stremio.netflixtop10", // Stay static to prevent duplicate addons when config changes
-        version: "3.2.0",
+        version: "3.3.0",
         name: "Netflix Top 10",
         description: "Weekly updated Netflix Top 10 rankings per-country with precise Stremio catalogs.",
         logo: "https://img.icons8.com/color/256/netflix.png",
@@ -466,24 +329,15 @@ async function fetchCatalogFresh(cacheKey, type, catalogId, apiKey, multiCountri
     const tmdbType = type === "movie" ? "movie" : "tv";
     const categoryType = type === "movie" ? "Films" : "TV";
 
-    let titles = [];
-    let targetCountry = "";
-
-    if (isGlobal || catalogId.endsWith("_global")) {
-        titles = await fetchGlobalTitles(categoryType);
-    } else {
+    let targetCountry = "Global";
+    if (!isGlobal && !catalogId.endsWith("_global")) {
         const prefix = catalogId.includes("movies_") ? "netflix_top10_movies_" : "netflix_top10_series_";
         const idSlug = catalogId.replace(prefix, "");
         targetCountry = multiCountries.find(c => toIdSlug(c) === idSlug) || idSlug;
-        
-        // --- FLIXPATROL INTEGRATION FOR ROMANIA ---
-        if (targetCountry.toLowerCase() === "romania") {
-            titles = await fetchFlixPatrolTitles(categoryType);
-        } else {
-            titles = await fetchNetflixTitles(categoryType, targetCountry);
-        }
-        // ------------------------------------------
     }
+
+    // --- All countries route through FlixPatrol Scraper now ---
+    const titles = await fetchFlixPatrolTitles(categoryType, targetCountry);
 
     if (titles.length === 0) return [];
 
@@ -494,7 +348,6 @@ async function fetchCatalogFresh(cacheKey, type, catalogId, apiKey, multiCountri
     return metas;
 }
 
-async function getLatestWeekDate() { return (await getParsedTSV()).globalLatestWeek || "Unknown"; }
 async function validateTmdbKey(apiKey) {
     if (!apiKey?.trim()) return { valid: false, message: "API key empty." };
     try {
@@ -520,7 +373,7 @@ function parseConfig(configStr) {
     } catch { return null; }
 }
 
-async function buildConfigHTML(countries, latestWeek) {
+async function buildConfigHTML(countries) {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -541,7 +394,7 @@ async function buildConfigHTML(countries, latestWeek) {
         .logo-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
         .logo-n { font-family: 'Bebas Neue', sans-serif; font-size: 38px; color: var(--red); line-height: 1; letter-spacing: -1px; }
         .logo-badge { background: var(--red); color: #fff; font-size: 10px; font-weight: 600; padding: 4px 8px; border-radius: 4px; text-transform: uppercase; }
-        .week-badge { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 4px 10px; background: rgba(229,9,20,0.1); border: 1px solid rgba(229,9,20,0.2); border-radius: 6px; font-size: 11px; color: #e57373; transition: 0.3s; }
+        .week-badge { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 4px 10px; border-radius: 6px; font-size: 11px; transition: 0.3s; color: #2ecc71; background: rgba(46, 204, 113, 0.1); border: 1px solid rgba(46, 204, 113, 0.3); }
         .card-body { padding: 28px 36px 36px; }
         .field { margin-bottom: 20px; position: relative; }
         .field label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
@@ -638,7 +491,7 @@ async function buildConfigHTML(countries, latestWeek) {
         <div class="logo-row"><span class="logo-n">N</span><span class="logo-badge">Stremio Addon</span></div>
         <h1>Netflix Top 10</h1>
         <p>Dynamic unmerged catalogs per country with correct Stremio metadata matching.</p>
-        <div class="week-badge" id="weekBadge"><span>Week of <strong>${latestWeek}</strong></span></div>
+        <div class="week-badge" id="weekBadge"><span>Status: <strong>Live Data (Today)</strong></span></div>
     </div>
     <div class="card-body">
         <div class="field">
@@ -720,30 +573,11 @@ async function buildConfigHTML(countries, latestWeek) {
     Netflix Top 10 Stremio Addon &nbsp;&bull;&nbsp; <a href="https://github.com/C0st1/top10addon" target="_blank">View on GitHub</a>
 </div>
 <script>
-    const availableCountries = ["Global", ...${JSON.stringify(countries)}];
-    const serverLatestWeek = "${latestWeek}";
+    const availableCountries = ${JSON.stringify(countries)};
     let selectedCountriesList = [];
     const searchInput = document.getElementById('countrySearch');
     const dropdown = document.getElementById('countryDropdown');
     const selectedContainer = document.getElementById('selectedCountries');
-
-    function updateWeekBadge() {
-        const badge = document.getElementById('weekBadge');
-        if (!badge) return;
-        
-        // Dynamically show live status if Romania is selected
-        if (selectedCountriesList.some(c => c.toLowerCase() === 'romania')) {
-            badge.innerHTML = '<span>Status: <strong>Live Data (Today)</strong></span>';
-            badge.style.color = '#2ecc71';
-            badge.style.background = 'rgba(46, 204, 113, 0.1)';
-            badge.style.borderColor = 'rgba(46, 204, 113, 0.3)';
-        } else {
-            badge.innerHTML = \`<span>Week of <strong>\${serverLatestWeek}</strong></span>\`;
-            badge.style.color = '#e57373';
-            badge.style.background = 'rgba(229,9,20,0.1)';
-            badge.style.borderColor = 'rgba(229,9,20,0.2)';
-        }
-    }
 
     function renderDropdown(filter="") {
         dropdown.innerHTML = '';
@@ -832,7 +666,6 @@ async function buildConfigHTML(countries, latestWeek) {
             
             selectedContainer.appendChild(pill);
         });
-        updateWeekBadge(); // Trigger badge update on render
     }
 
     function saveState() {
@@ -969,14 +802,13 @@ module.exports = async (req, res) => {
     if (path === "") path = "/";
 
     if (path === "/" || path === "/configure" || path.endsWith("/configure")) {
-        const [countries, latestWeek] = await Promise.all([getAvailableCountries(), getLatestWeekDate()]);
-        return res.status(200).setHeader("Content-Type", "text/html;charset=UTF-8").send(await buildConfigHTML(countries, latestWeek));
+        const countries = await getAvailableCountries();
+        return res.status(200).setHeader("Content-Type", "text/html;charset=UTF-8").send(await buildConfigHTML(countries));
     }
 
     if (path === "/health") {
-        const tsvTs = getTsvTimestamp();
         res.setHeader("Cache-Control", "no-cache");
-        return res.status(200).json({ status: "ok", lastTsvFetch: tsvTs > 0 ? new Date(tsvTs).toISOString() : null, time: new Date().toISOString() });
+        return res.status(200).json({ status: "ok", type: "flixpatrol_scraper", time: new Date().toISOString() });
     }
 
     if (path === "/validate-tmdb-key" && req.method === "POST") {
