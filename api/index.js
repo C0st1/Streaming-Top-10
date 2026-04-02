@@ -117,49 +117,36 @@ function setCORSHeaders(res, isMutation = false) {
 
 /**
  * SEC-09 FIX: Safely parse JSON body with size and depth limits.
+ * Vercel (@vercel/node) auto-parses JSON bodies, so req.body is already an object.
  * @param {Object} req
  * @returns {{ body: Object|null, error: string|null }}
  */
 function safeParseBody(req) {
-    let bodyStr = '';
-
-    if (req.body && typeof req.body !== 'string') {
-        return { body: req.body, error: null };
-    }
-    if (typeof req.body === 'string') {
-        bodyStr = req.body;
-    } else {
-        // Manual body reading for edge cases
-        const bufs = [];
-        let length = 0;
-        try {
-            for await (const chunk of req) {
-                bufs.push(chunk);
-                length += chunk.length;
-                if (length > SECURITY.MAX_REQUEST_BODY_BYTES) {
-                    return { body: null, error: 'Request body too large' };
-                }
-            }
-            bodyStr = Buffer.concat(bufs).toString('utf-8');
-        } catch (e) {
-            return { body: null, error: 'Failed to read request body' };
-        }
-    }
-
-    if (bodyStr.length > SECURITY.MAX_REQUEST_BODY_BYTES) {
-        return { body: null, error: 'Request body too large' };
-    }
-
-    try {
-        const parsed = JSON.parse(bodyStr);
-        // SEC-09 FIX: Validate JSON depth
-        if (getJsonDepth(parsed) > SECURITY.MAX_JSON_DEPTH) {
+    // Vercel auto-parses JSON request bodies — just validate
+    if (req.body && typeof req.body === 'object') {
+        if (getJsonDepth(req.body) > SECURITY.MAX_JSON_DEPTH) {
             return { body: null, error: 'JSON depth exceeds limit' };
         }
-        return { body: parsed, error: null };
-    } catch (e) {
-        return { body: null, error: 'Invalid JSON' };
+        return { body: req.body, error: null };
     }
+
+    // Fallback: if body came as a string (shouldn't happen on Vercel)
+    if (typeof req.body === 'string') {
+        if (req.body.length > SECURITY.MAX_REQUEST_BODY_BYTES) {
+            return { body: null, error: 'Request body too large' };
+        }
+        try {
+            const parsed = JSON.parse(req.body);
+            if (getJsonDepth(parsed) > SECURITY.MAX_JSON_DEPTH) {
+                return { body: null, error: 'JSON depth exceeds limit' };
+            }
+            return { body: parsed, error: null };
+        } catch (e) {
+            return { body: null, error: 'Invalid JSON' };
+        }
+    }
+
+    return { body: null, error: 'Missing request body' };
 }
 
 /**
