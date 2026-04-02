@@ -698,7 +698,7 @@ module.exports = async (req, res) => {
         // -----------------------------------------------
         // Configuration page (Stremio addon config route)
         // -----------------------------------------------
-        const configPageMatch = pathWithoutQuery.match(/^\/([^/]+)\/config$/);
+        const configPageMatch = pathWithoutQuery.match(/^\/([^/]+)\/config(?:ure)?$/);
         if (configPageMatch) {
             return handleTokenConfigPage(req, res, trackResponse);
         }
