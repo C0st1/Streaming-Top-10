@@ -1,13 +1,19 @@
 // ============================================================
-// Vercel / Node.js Server — Netflix Top 10 Stremio Addon v3.7.0
+// Vercel / Node.js Server — Netflix Top 10 Stremio Addon v3.7.2
 // ARCH-01 FIX: Thin routing layer; logic in lib/ modules
+// SEC-02 FIX: Exact hostname comparison for CORS origin validation
+// SEC-03 FIX: Rate limiting on all token-based routes
 // SEC-04 FIX: Restrict CORS on mutation endpoints
 // SEC-06 FIX: Rate limiting on all routes
-// SEC-07 FIX: Host header validation
+// SEC-07 FIX: Host header validation; no reflected host in error responses
 // SEC-09 FIX: Request body size & depth validation
+// SEC-09b FIX: Token hash logged instead of prefix (SEC-09)
 // SEC-10 FIX: Security headers (CSP, HSTS, X-Frame-Options, etc.)
 // SEC-13 FIX: Input sanitization on type overrides
+// LOG-01 FIX: Circular reference protection in getJsonDepth()
+// LOG-02 FIX: Invalid host returns clean 400 without reflected URL
 // PERF-04 FIX: All require() calls at module top level
+// RD-01  FIX: Extracted route handlers into named functions
 // REC-6: Request ID for tracing
 // REC-7: Structured JSON logging
 // REC-8: Enhanced health check with dependencies
@@ -15,6 +21,7 @@
 // REC-12: Metrics export
 // ============================================================
 
+const crypto = require('crypto');                              // PERF-04 + SEC-09b
 const { buildConfigHTML } = require('../lib/template');
 const { fetchFlixPatrolTitles, getAvailableCountries } = require('../lib/scraper');
 const { buildManifest, buildCatalog } = require('../lib/manifest');
@@ -34,7 +41,13 @@ const rateLimiters = {
     catalog: new RateLimiter(RATE_LIMITS.CATALOG),
     health: new RateLimiter(RATE_LIMITS.HEALTH),
     metrics: new RateLimiter(RATE_LIMITS.METRICS),
+    manifest: new RateLimiter(RATE_LIMITS.MANIFEST),        // SEC-03 FIX
+    configPage: new RateLimiter(RATE_LIMITS.CONFIG_PAGE),   // SEC-03 FIX
 };
+
+// ============================================================
+// Helper Utilities
+// ============================================================
 
 /**
  * Get client IP from Vercel headers.
@@ -48,6 +61,21 @@ function getClientIp(req) {
         req.socket?.remoteAddress ||
         'unknown'
     );
+}
+
+/**
+ * SEC-02 FIX: Extract hostname from a URL string for exact comparison.
+ * Prevents substring-based bypass where "evil-example.com" matches "example.com".
+ * @param {string} urlString
+ * @returns {string}
+ */
+function extractHostname(urlString) {
+    if (!urlString || typeof urlString !== 'string') return '';
+    try {
+        return new URL(urlString).hostname.toLowerCase();
+    } catch {
+        return '';
+    }
 }
 
 /**
@@ -96,7 +124,8 @@ function setSecurityHeaders(res, isHtml = false) {
 }
 
 /**
- * SEC-04 FIX: Set CORS headers — wildcard for GET (public API), restrictive for mutations.
+ * SEC-02 FIX: Set CORS headers — wildcard for GET (public API), restrictive for mutations.
+ * Uses exact hostname comparison instead of substring .includes().
  * @param {Object} res
  * @param {boolean} isMutation - Whether the endpoint modifies state
  */
@@ -108,9 +137,12 @@ function setCORSHeaders(res, isMutation = false) {
     const origin = res.req?.headers?.origin;
     if (origin) {
         if (isMutation) {
-            // SEC-04 FIX: Only allow same-origin and known safe origins for mutations
-            const host = res.req?.headers?.host || '';
-            if (origin.includes(host) || origin.endsWith('.vercel.app')) {
+            // SEC-02 FIX: Exact hostname comparison — not substring match
+            const originHost = extractHostname(origin);
+            const hostHeader = (res.req?.headers?.host || '').toLowerCase();
+            const reqHost = hostHeader.split(':')[0]; // Strip port for comparison
+
+            if (originHost === reqHost || originHost.endsWith('.vercel.app')) {
                 res.setHeader('Access-Control-Allow-Origin', origin);
                 res.setHeader('Vary', 'Origin');
             }
@@ -126,6 +158,7 @@ function setCORSHeaders(res, isMutation = false) {
 
 /**
  * SEC-09 FIX: Safely parse JSON body with size and depth limits.
+ * LOG-01 FIX: Uses WeakSet to detect circular references in depth calculation.
  * Vercel (@vercel/node) auto-parses JSON bodies, so req.body is already an object.
  * @param {Object} req
  * @returns {{ body: Object|null, error: string|null }}
@@ -159,18 +192,37 @@ function safeParseBody(req) {
 }
 
 /**
- * Get the maximum depth of a nested object.
+ * LOG-01 FIX: Get the maximum depth of a nested object with circular reference protection.
+ * Uses a WeakSet to track visited objects and returns Infinity on cycle detection.
  * @param {*} obj
+ * @param {WeakSet} [seen] - Internal tracking for circular refs
  * @returns {number}
  */
-function getJsonDepth(obj) {
+function getJsonDepth(obj, seen) {
     if (typeof obj !== 'object' || obj === null) return 0;
+    if (!seen) seen = new WeakSet();
+    if (seen.has(obj)) return Infinity; // LOG-01 FIX: Circular reference detected
+    seen.add(obj);
     let maxDepth = 0;
     for (const val of Object.values(obj)) {
-        const d = getJsonDepth(val);
+        const d = getJsonDepth(val, seen);
+        if (d === Infinity) return Infinity;
         if (d > maxDepth) maxDepth = d;
     }
     return maxDepth + 1;
+}
+
+/**
+ * SEC-09b FIX: Compute a safe hash of a token for logging (no prefix leak).
+ * @param {string} token
+ * @returns {string} First 12 hex chars of SHA-256
+ */
+function safeTokenHash(token) {
+    try {
+        return crypto.createHash('sha256').update(token).digest('hex').substring(0, 12);
+    } catch {
+        return '(hash-error)';
+    }
 }
 
 /**
@@ -208,8 +260,356 @@ async function checkDependencies(logger) {
     return results;
 }
 
+/**
+ * SEC-03 FIX: Helper — check rate limit and return 429 if exceeded.
+ * @param {Object} res
+ * @param {string} key
+ * @param {string} routeName
+ * @param {string} method
+ * @param {string} pathWithoutQuery
+ * @param {Function} trackResponse
+ * @param {Object} logger
+ * @returns {boolean} true if allowed, false if rate-limited (response already sent)
+ */
+function checkRateLimit(res, key, routeName, method, pathWithoutQuery, trackResponse, logger) {
+    const rl = rateLimiters[routeName].check(key);
+    Object.entries(RateLimiter.headers(rl)).forEach(([k, v]) => res.setHeader(k, v));
+
+    if (!rl.allowed) {
+        trackRateLimitExceeded(routeName);
+        trackResponse(429);
+        res.status(429).json({ error: 'Rate limit exceeded' });
+        return false;
+    }
+    return true;
+}
+
 // ============================================================
-// Main request handler
+// Route Handlers — RD-01 FIX: Extracted from monolithic handler
+// ============================================================
+
+/**
+ * SEC-03 FIX: Rate-limited config page handler.
+ * @param {Object} req
+ * @param {Object} res
+ * @param {Function} trackResponse
+ */
+function handleConfigPage(req, res, trackResponse) {
+    setCORSHeaders(res);
+    const clientIp = getClientIp(req);
+    if (!checkRateLimit(res, `${clientIp}:config`, 'configPage', req.method, '/configure', trackResponse)) return;
+
+    const countries = getAvailableCountries();
+    trackResponse(200);
+    return res.status(200)
+        .setHeader("Content-Type", "text/html;charset=UTF-8")
+        .send(buildConfigHTML(countries));
+}
+
+/**
+ * Metrics endpoint — Prometheus-compatible.
+ * SEC-06 FIX: Protected by rate limiting.
+ */
+function handleMetrics(req, res, trackResponse) {
+    setCORSHeaders(res);
+    const clientIp = getClientIp(req);
+    const pathWithoutQuery = req.url.split('?')[0];
+    if (!checkRateLimit(res, `${clientIp}:metrics`, 'metrics', req.method, pathWithoutQuery, trackResponse)) return;
+
+    res.setHeader("Content-Type", "text/plain; version=0.0.4");
+    res.setHeader("Cache-Control", "no-cache");
+    trackResponse(200);
+    return res.status(200).send(metrics.export());
+}
+
+/**
+ * Health check — permissive rate limit.
+ */
+async function handleHealth(req, res, trackResponse, logger) {
+    setCORSHeaders(res);
+    const clientIp = getClientIp(req);
+    const pathWithoutQuery = req.url.split('?')[0];
+    if (!checkRateLimit(res, `${clientIp}:health`, 'health', req.method, pathWithoutQuery, trackResponse)) return;
+
+    // Check dependencies
+    const dependencies = await checkDependencies(logger);
+    const allHealthy = Object.values(dependencies).every(d => d.status === 'healthy');
+    const status = allHealthy ? 'ok' : 'degraded';
+
+    res.setHeader("Cache-Control", "no-cache");
+    trackResponse(200);
+    return res.status(200).json({
+        status,
+        type: "flixpatrol_scraper",
+        version: VERSION,
+        time: new Date().toISOString(),
+        rateLimits: {
+            api: RATE_LIMITS.API,
+            catalog: RATE_LIMITS.CATALOG,
+        },
+        dependencies,
+    });
+}
+
+/**
+ * SEC-06 FIX: Circuit breaker status endpoint — rate limited.
+ */
+function handleCircuitBreakerStatus(req, res, trackResponse) {
+    setCORSHeaders(res);
+    const clientIp = getClientIp(req);
+    if (!checkRateLimit(res, `${clientIp}:status`, 'health', req.method, '/status/circuit-breakers', trackResponse)) return;
+
+    const statuses = {};
+    for (const [name, cb] of Object.entries(circuitBreakers)) {
+        statuses[name] = cb.getStatus();
+    }
+    trackResponse(200);
+    return res.status(200).json(statuses);
+}
+
+/**
+ * API: Validate TMDB key (rate limited).
+ */
+async function handleValidateTmdbKey(req, res, trackResponse, logger) {
+    setCORSHeaders(res, true); // mutation endpoint
+    const clientIp = getClientIp(req);
+    const pathWithoutQuery = req.url.split('?')[0];
+    if (!checkRateLimit(res, `${clientIp}:validate`, 'api', req.method, pathWithoutQuery, trackResponse)) return;
+
+    const { body, error } = safeParseBody(req);
+    if (error) {
+        trackResponse(400);
+        return res.status(400).json({ error });
+    }
+
+    const apiKey = (body?.apiKey || '').trim();
+    if (!apiKey) {
+        trackResponse(400);
+        return res.status(400).json({ error: 'API key is required' });
+    }
+
+    // Basic format check before making external request
+    if (!isValidApiKeyFormat(apiKey)) {
+        trackResponse(400);
+        return res.status(400).json({ error: 'Invalid API key format' });
+    }
+
+    logger.info('Validating TMDB API key');
+
+    try {
+        const result = await circuitBreakers.tmdb.execute(() => validateTmdbKey(apiKey));
+        trackExternalApiCall('tmdb', result.valid);
+        trackResponse(200);
+        return res.status(200).json(result);
+    } catch (e) {
+        trackExternalApiCall('tmdb', false);
+        logger.error('TMDB validation failed', { error: e.message });
+        trackResponse(503);
+        return res.status(503).json({ error: 'Service temporarily unavailable' });
+    }
+}
+
+/**
+ * API: Save config (rate limited, strict CORS).
+ * SEC-07 FIX: Clean 400 response without reflected host when host is invalid.
+ * LOG-02 FIX: Returns a simple error object, no confusing URL with bad host.
+ */
+async function handleSaveConfig(req, res, trackResponse, logger) {
+    setCORSHeaders(res, true); // mutation endpoint
+    const clientIp = getClientIp(req);
+    const pathWithoutQuery = req.url.split('?')[0];
+    if (!checkRateLimit(res, `${clientIp}:save`, 'api', req.method, pathWithoutQuery, trackResponse)) return;
+
+    const { body, error } = safeParseBody(req);
+    if (error) {
+        trackResponse(400);
+        return res.status(400).json({ error });
+    }
+
+    const tmdbApiKey = (body?.tmdbApiKey || '').trim();
+    if (!tmdbApiKey) {
+        trackResponse(400);
+        return res.status(400).json({ error: "TMDB API key is required" });
+    }
+
+    // Validate API key format before storing
+    if (!isValidApiKeyFormat(tmdbApiKey)) {
+        trackResponse(400);
+        return res.status(400).json({ error: "Invalid TMDB API key format" });
+    }
+
+    // SEC-07 FIX: Validate host header before using it in URLs
+    const host = req.headers['host'] || '';
+    if (!isValidHost(host)) {
+        logger.warn('Suspicious Host header rejected', { host });
+        // LOG-02 FIX: Clean error — no reflected host in response
+        trackResponse(400);
+        return res.status(400).json({
+            error: 'Invalid request origin',
+        });
+    }
+
+    const protocol = req.headers['x-forwarded-proto'] || 'https';
+    const baseUrl = `${protocol}://${host}`;
+
+    // Sanitize type override strings
+    const safeConfig = {
+        tmdbApiKey,
+        rpdbApiKey: (body?.rpdbApiKey || '').trim() || undefined,
+        country: String(body?.country || 'Global'),
+        movieType: sanitizeTypeString(body?.movieType) || undefined,
+        seriesType: sanitizeTypeString(body?.seriesType) || undefined,
+    };
+
+    // Remove undefined values
+    Object.keys(safeConfig).forEach(k => safeConfig[k] === undefined && delete safeConfig[k]);
+
+    logger.info('Saving configuration', { country: safeConfig.country });
+
+    try {
+        const result = saveConfig(safeConfig, baseUrl);
+        trackResponse(200);
+        return res.status(200).json({
+            token: result.token,
+            manifestUrl: result.manifestUrl,
+            installUrl: result.installUrl
+        });
+    } catch (e) {
+        logger.error('Failed to save config', { error: e.message });
+        trackResponse(500);
+        return res.status(500).json({ error: "Failed to save configuration" });
+    }
+}
+
+/**
+ * SEC-03 FIX: Rate-limited config page for token-based route.
+ */
+function handleTokenConfigPage(req, res, trackResponse) {
+    setCORSHeaders(res);
+    const clientIp = getClientIp(req);
+    if (!checkRateLimit(res, `${clientIp}:config`, 'configPage', req.method, '/config', trackResponse)) return;
+
+    const countries = getAvailableCountries();
+    trackResponse(200);
+    return res.status(200)
+        .setHeader("Content-Type", "text/html;charset=UTF-8")
+        .send(buildConfigHTML(countries));
+}
+
+/**
+ * SEC-03 FIX: Rate-limited manifest handler.
+ * SEC-09b FIX: Token hash logged instead of prefix.
+ */
+async function handleManifest(req, res, token, trackResponse, logger) {
+    setCORSHeaders(res);
+    const clientIp = getClientIp(req);
+    if (!checkRateLimit(res, `${clientIp}:manifest`, 'manifest', req.method, '/manifest.json', trackResponse)) return;
+
+    // Validate token: URL-safe base64 with dots (encrypted) or legacy format
+    const isNewToken = /^[A-Za-z0-9._~-]+$/.test(token) && token.length > 50;
+    const isLegacyToken = /^[a-zA-Z0-9]{32}$/.test(token) || token.startsWith('%7B');
+
+    if (!isNewToken && !isLegacyToken) {
+        trackResponse(400);
+        return res.status(400).json({ error: 'Invalid token format' });
+    }
+
+    // Try encrypted token first (new format)
+    const config = getConfig(token);
+    if (config) {
+        const norm = normalizeConfig(config);
+        res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=7200");
+        trackResponse(200);
+        return res.status(200)
+            .setHeader("Content-Type", "application/json")
+            .json(buildManifest(norm.country, norm.multiCountries, norm.movieType, norm.seriesType));
+    }
+
+    // Backward compatibility: try parsing as legacy encoded config
+    const legacyConfig = parseConfig(token);
+    if (legacyConfig) {
+        logger.warn('Legacy encoded config URL detected');
+        res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=7200");
+        trackResponse(200);
+        return res.status(200)
+            .setHeader("Content-Type", "application/json")
+            .json(buildManifest(legacyConfig.country, legacyConfig.multiCountries, legacyConfig.movieType, legacyConfig.seriesType));
+    }
+
+    trackResponse(404);
+    return res.status(404).json({ error: "Configuration not found. Please regenerate your install link." });
+}
+
+/**
+ * SEC-03 FIX: Rate-limited catalog handler.
+ * SEC-09b FIX: Token hash in log instead of prefix.
+ */
+async function handleCatalog(req, res, token, catalogType, catalogId, trackResponse, logger) {
+    setCORSHeaders(res);
+    const clientIp = getClientIp(req);
+    if (!checkRateLimit(res, `${clientIp}:catalog`, 'catalog', req.method, '/catalog', trackResponse)) return;
+
+    // Validate token: accept new encrypted format, legacy format, or URL-encoded JSON
+    const isNewToken = /^[A-Za-z0-9._~-]+$/.test(token) && token.length > 50;
+    const isLegacyToken = /^[a-zA-Z0-9]{32}$/.test(token);
+    const isUrlEncoded = token.includes('%') || token.startsWith('%7B');
+
+    if (!isNewToken && !isLegacyToken && !isUrlEncoded) {
+        trackResponse(400);
+        return res.status(400).json({ error: 'Invalid token format' });
+    }
+
+    const config = getConfig(token);
+    let norm = null;
+
+    if (config) {
+        norm = normalizeConfig(config);
+    } else {
+        // Backward compatibility: try legacy encoded config
+        norm = parseConfig(token);
+        if (norm) {
+            logger.warn('Legacy encoded config URL detected for catalog request');
+        }
+    }
+
+    if (!norm) {
+        // SEC-09b FIX: Log safe hash, not token prefix
+        logger.error('Failed to decode token', {
+            tokenLength: token.length,
+            tokenHash: safeTokenHash(token),
+        });
+        trackResponse(400);
+        return res.status(400).json({ error: "Missing or invalid configuration. Please regenerate your install link." });
+    }
+
+    logger.info('Building catalog', { type: catalogType, catalogId });
+
+    try {
+        const metas = await circuitBreakers.flixpatrol.executeWithFallback(
+            () => buildCatalog(
+                catalogType, catalogId,
+                norm.tmdbApiKey, norm.rpdbApiKey,
+                norm.multiCountries
+            ),
+            () => [] // Fallback to empty array if circuit is open
+        );
+
+        trackExternalApiCall('flixpatrol', true);
+        res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=7200");
+        trackResponse(200);
+        return res.status(200)
+            .setHeader("Content-Type", "application/json")
+            .json({ metas });
+    } catch (e) {
+        trackExternalApiCall('flixpatrol', false);
+        logger.error('Catalog build failed', { error: e.message });
+        trackResponse(503);
+        return res.status(503).json({ error: 'Service temporarily unavailable' });
+    }
+}
+
+// ============================================================
+// Main request handler — RD-01 FIX: Thin dispatcher
 // ============================================================
 
 module.exports = async (req, res) => {
@@ -252,350 +652,85 @@ module.exports = async (req, res) => {
         });
     };
 
-    // -----------------------------------------------
-    // Configuration page (root & /configure)
-    // -----------------------------------------------
-    if (pathWithoutQuery === "/" || pathWithoutQuery === "/configure") {
+    try {
+        // -----------------------------------------------
+        // Configuration page (root & /configure)
+        // -----------------------------------------------
+        if (pathWithoutQuery === "/" || pathWithoutQuery === "/configure") {
+            return handleConfigPage(req, res, trackResponse);
+        }
+
+        // -----------------------------------------------
+        // Metrics endpoint — Prometheus-compatible
+        // -----------------------------------------------
+        if (pathWithoutQuery === "/metrics") {
+            return handleMetrics(req, res, trackResponse);
+        }
+
+        // -----------------------------------------------
+        // Health check — permissive rate limit
+        // -----------------------------------------------
+        if (pathWithoutQuery === "/health") {
+            return await handleHealth(req, res, trackResponse, logger);
+        }
+
+        // -----------------------------------------------
+        // Circuit breaker status endpoint
+        // -----------------------------------------------
+        if (pathWithoutQuery === "/status/circuit-breakers") {
+            return handleCircuitBreakerStatus(req, res, trackResponse);
+        }
+
+        // -----------------------------------------------
+        // API: Validate TMDB key (rate limited)
+        // -----------------------------------------------
+        if (pathWithoutQuery === "/api/validate-tmdb-key" && req.method === "POST") {
+            return await handleValidateTmdbKey(req, res, trackResponse, logger);
+        }
+
+        // -----------------------------------------------
+        // API: Save config (rate limited, strict CORS)
+        // -----------------------------------------------
+        if (pathWithoutQuery === "/api/save-config" && req.method === "POST") {
+            return await handleSaveConfig(req, res, trackResponse, logger);
+        }
+
+        // -----------------------------------------------
+        // Configuration page (Stremio addon config route)
+        // -----------------------------------------------
+        const configPageMatch = pathWithoutQuery.match(/^\/([^/]+)\/config$/);
+        if (configPageMatch) {
+            return handleTokenConfigPage(req, res, trackResponse);
+        }
+
+        // -----------------------------------------------
+        // Manifest: /{token}/manifest.json
+        // -----------------------------------------------
+        if (pathWithoutQuery.endsWith("/manifest.json")) {
+            const token = pathWithoutQuery.replace("/manifest.json", "").replace(/^\//, "");
+            return await handleManifest(req, res, token, trackResponse, logger);
+        }
+
+        // -----------------------------------------------
+        // Catalog: /{token}/catalog/{type}/{id}.json
+        // -----------------------------------------------
+        const catalogMatch = pathWithoutQuery.match(/^\/(.*?)\/catalog\/([^/]+)\/([^/.]+)(?:\.json)?$/);
+        if (catalogMatch) {
+            const token = catalogMatch[1];
+            const catalogType = catalogMatch[3].includes("movies_") ? "movie" : "series";
+            return await handleCatalog(req, res, token, catalogType, catalogMatch[3], trackResponse, logger);
+        }
+
+        // -----------------------------------------------
+        // 404 — Don't leak information
+        // -----------------------------------------------
         setCORSHeaders(res);
-        const countries = getAvailableCountries();
-        trackResponse(200);
-        return res.status(200)
-            .setHeader("Content-Type", "text/html;charset=UTF-8")
-            .send(buildConfigHTML(countries));
-    }
-
-    // -----------------------------------------------
-    // Metrics endpoint — Prometheus-compatible
-    // -----------------------------------------------
-    if (pathWithoutQuery === "/metrics") {
-        setCORSHeaders(res);
-        const rl = rateLimiters.metrics.check(`${clientIp}:metrics`);
-        Object.entries(RateLimiter.headers(rl)).forEach(([k, v]) => res.setHeader(k, v));
-
-        if (!rl.allowed) {
-            trackRateLimitExceeded('metrics');
-            trackResponse(429);
-            return res.status(429).json({ error: 'Rate limit exceeded' });
-        }
-
-        res.setHeader("Content-Type", "text/plain; version=0.0.4");
-        res.setHeader("Cache-Control", "no-cache");
-        trackResponse(200);
-        return res.status(200).send(metrics.export());
-    }
-
-    // -----------------------------------------------
-    // Health check — permissive rate limit
-    // -----------------------------------------------
-    if (pathWithoutQuery === "/health") {
-        setCORSHeaders(res);
-        const rl = rateLimiters.health.check(`${clientIp}:health`);
-        Object.entries(RateLimiter.headers(rl)).forEach(([k, v]) => res.setHeader(k, v));
-
-        if (!rl.allowed) {
-            trackRateLimitExceeded('health');
-            trackResponse(429);
-            return res.status(429).json({ error: 'Rate limit exceeded' });
-        }
-
-        // Check dependencies
-        const dependencies = await checkDependencies(logger);
-        const allHealthy = Object.values(dependencies).every(d => d.status === 'healthy');
-        const status = allHealthy ? 'ok' : 'degraded';
-
-        res.setHeader("Cache-Control", "no-cache");
-        trackResponse(200);
-        return res.status(200).json({
-            status,
-            type: "flixpatrol_scraper",
-            version: VERSION,
-            time: new Date().toISOString(),
-            requestId,
-            rateLimits: {
-                api: RATE_LIMITS.API,
-                catalog: RATE_LIMITS.CATALOG,
-            },
-            dependencies,
-        });
-    }
-
-    // -----------------------------------------------
-    // Circuit breaker status endpoint
-    // -----------------------------------------------
-    if (pathWithoutQuery === "/status/circuit-breakers") {
-        setCORSHeaders(res);
-        const statuses = {};
-        for (const [name, cb] of Object.entries(circuitBreakers)) {
-            statuses[name] = cb.getStatus();
-        }
-        trackResponse(200);
-        return res.status(200).json(statuses);
-    }
-
-    // -----------------------------------------------
-    // API: Validate TMDB key (rate limited)
-    // -----------------------------------------------
-    if (pathWithoutQuery === "/api/validate-tmdb-key" && req.method === "POST") {
-        setCORSHeaders(res, true); // mutation endpoint
-        const rl = rateLimiters.api.check(`${clientIp}:validate`);
-        Object.entries(RateLimiter.headers(rl)).forEach(([k, v]) => res.setHeader(k, v));
-
-        if (!rl.allowed) {
-            trackRateLimitExceeded('validate-tmdb-key');
-            trackResponse(429);
-            return res.status(429).json({ error: 'Rate limit exceeded. Please wait before trying again.' });
-        }
-
-        const { body, error } = safeParseBody(req);
-        if (error) {
-            trackResponse(400);
-            return res.status(400).json({ error });
-        }
-
-        const apiKey = (body?.apiKey || '').trim();
-        if (!apiKey) {
-            trackResponse(400);
-            return res.status(400).json({ error: 'API key is required' });
-        }
-
-        // SEC-08 FIX: Basic format check before making external request
-        if (!isValidApiKeyFormat(apiKey)) {
-            trackResponse(400);
-            return res.status(400).json({ error: 'Invalid API key format' });
-        }
-
-        logger.info('Validating TMDB API key');
-
-        try {
-            const result = await circuitBreakers.tmdb.execute(() => validateTmdbKey(apiKey));
-            trackExternalApiCall('tmdb', result.valid);
-            trackResponse(200);
-            return res.status(200).json(result);
-        } catch (e) {
-            trackExternalApiCall('tmdb', false);
-            logger.error('TMDB validation failed', { error: e.message });
-            trackResponse(503);
-            return res.status(503).json({ error: 'Service temporarily unavailable', requestId });
-        }
-    }
-
-    // -----------------------------------------------
-    // API: Save config (rate limited, strict CORS)
-    // -----------------------------------------------
-    if (pathWithoutQuery === "/api/save-config" && req.method === "POST") {
-        setCORSHeaders(res, true); // mutation endpoint
-        const rl = rateLimiters.api.check(`${clientIp}:save`);
-        Object.entries(RateLimiter.headers(rl)).forEach(([k, v]) => res.setHeader(k, v));
-
-        if (!rl.allowed) {
-            trackRateLimitExceeded('save-config');
-            trackResponse(429);
-            return res.status(429).json({ error: 'Rate limit exceeded. Please wait before trying again.' });
-        }
-
-        const { body, error } = safeParseBody(req);
-        if (error) {
-            trackResponse(400);
-            return res.status(400).json({ error });
-        }
-
-        const tmdbApiKey = (body?.tmdbApiKey || '').trim();
-        if (!tmdbApiKey) {
-            trackResponse(400);
-            return res.status(400).json({ error: "TMDB API key is required" });
-        }
-
-        // SEC-08 FIX: Validate API key format before storing
-        if (!isValidApiKeyFormat(tmdbApiKey)) {
-            trackResponse(400);
-            return res.status(400).json({ error: "Invalid TMDB API key format" });
-        }
-
-        // SEC-07 FIX: Validate host header before using it in URLs
-        const host = req.headers['host'] || '';
-        if (!isValidHost(host)) {
-            logger.warn('Suspicious Host header', { host });
-            // Use fallback instead of reflecting attacker-controlled host
-            const proto = req.headers['x-forwarded-proto'] || 'https';
-            trackResponse(400);
-            return res.status(400).json({
-                error: 'Invalid request origin',
-                // Still generate the config but with a safe base URL
-                token: '',
-                manifestUrl: `${proto}://${host}/${''}/manifest.json`,
-                installUrl: '',
-            });
-        }
-
-        const protocol = req.headers['x-forwarded-proto'] || 'https';
-        const baseUrl = `${protocol}://${host}`;
-
-        // SEC-13 FIX: Sanitize type override strings
-        const safeConfig = {
-            tmdbApiKey,
-            rpdbApiKey: (body?.rpdbApiKey || '').trim() || undefined,
-            country: String(body?.country || 'Global'),
-            movieType: sanitizeTypeString(body?.movieType) || undefined,
-            seriesType: sanitizeTypeString(body?.seriesType) || undefined,
-        };
-
-        // Remove undefined values
-        Object.keys(safeConfig).forEach(k => safeConfig[k] === undefined && delete safeConfig[k]);
-
-        logger.info('Saving configuration', { country: safeConfig.country });
-
-        try {
-            const result = saveConfig(safeConfig, baseUrl);
-            trackResponse(200);
-            return res.status(200).json({
-                token: result.token,
-                manifestUrl: result.manifestUrl,
-                installUrl: result.installUrl
-            });
-        } catch (e) {
-            logger.error('Failed to save config', { error: e.message });
-            trackResponse(500);
-            return res.status(500).json({ error: "Failed to save configuration", requestId });
-        }
-    }
-
-    // -----------------------------------------------
-    // Configuration page (Stremio addon config route)
-    // Stremio derives this URL from the manifest location:
-    //   manifest: /{token}/manifest.json  →  config: /{token}/config
-    // -----------------------------------------------
-    const configPageMatch = pathWithoutQuery.match(/^\/([^/]+)\/config$/);
-    if (configPageMatch) {
-        setCORSHeaders(res);
-        const countries = getAvailableCountries();
-        trackResponse(200);
-        return res.status(200)
-            .setHeader("Content-Type", "text/html;charset=UTF-8")
-            .send(buildConfigHTML(countries));
-    }
-
-    // -----------------------------------------------
-    // Manifest: /{token}/manifest.json
-    // -----------------------------------------------
-    if (pathWithoutQuery.endsWith("/manifest.json")) {
-        setCORSHeaders(res);
-        const token = pathWithoutQuery.replace("/manifest.json", "").replace(/^\//, "");
-
-        // Validate token: URL-safe base64 with dots (encrypted) or legacy format
-        // New encrypted tokens: base64 chars + - _ . ~
-        // Legacy tokens: URL-encoded JSON or 32 alphanumeric
-        const isNewToken = /^[A-Za-z0-9._~-]+$/.test(token) && token.length > 50;
-        const isLegacyToken = /^[a-zA-Z0-9]{32}$/.test(token) || token.startsWith('%7B');
-        
-        if (!isNewToken && !isLegacyToken) {
-            trackResponse(400);
-            return res.status(400).json({ error: 'Invalid token format' });
-        }
-
-        // Try encrypted token first (new format)
-        const config = getConfig(token);
-        if (config) {
-            const norm = normalizeConfig(config);
-            res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=7200");
-            trackResponse(200);
-            return res.status(200)
-                .setHeader("Content-Type", "application/json")
-                .json(buildManifest(norm.country, norm.multiCountries, norm.movieType, norm.seriesType));
-        }
-
-        // Backward compatibility: try parsing as legacy encoded config
-        const legacyConfig = parseConfig(token);
-        if (legacyConfig) {
-            logger.warn('Legacy encoded config URL detected');
-            res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=7200");
-            trackResponse(200);
-            return res.status(200)
-                .setHeader("Content-Type", "application/json")
-                .json(buildManifest(legacyConfig.country, legacyConfig.multiCountries, legacyConfig.movieType, legacyConfig.seriesType));
-        }
-
         trackResponse(404);
-        return res.status(404).json({ error: "Configuration not found. Please regenerate your install link." });
+        return res.status(404).send("Not Found");
+    } catch (fatalError) {
+        // Catch-all for unexpected errors in route handlers
+        logger.error('Unhandled error in request handler', { error: fatalError.message });
+        trackResponse(500);
+        return res.status(500).json({ error: 'Internal server error' });
     }
-
-    // -----------------------------------------------
-    // Catalog: /{token}/catalog/{type}/{id}.json
-    // SEC-06 FIX: Stricter rate limit (triggers external API calls)
-    // -----------------------------------------------
-    const catalogMatch = pathWithoutQuery.match(/^\/(.*?)\/catalog\/([^/]+)\/([^/.]+)(?:\.json)?$/);
-    if (catalogMatch) {
-        setCORSHeaders(res);
-        const rl = rateLimiters.catalog.check(`${clientIp}:catalog`);
-        Object.entries(RateLimiter.headers(rl)).forEach(([k, v]) => res.setHeader(k, v));
-
-        if (!rl.allowed) {
-            trackRateLimitExceeded('catalog');
-            trackResponse(429);
-            return res.status(429).json({ error: 'Rate limit exceeded. Too many catalog requests.' });
-        }
-
-        const token = catalogMatch[1];
-
-        // Validate token: accept new encrypted format, legacy format, or URL-encoded JSON
-        const isNewToken = /^[A-Za-z0-9._~-]+$/.test(token) && token.length > 50;
-        const isLegacyToken = /^[a-zA-Z0-9]{32}$/.test(token);
-        const isUrlEncoded = token.includes('%') || token.startsWith('%7B');
-        
-        if (!isNewToken && !isLegacyToken && !isUrlEncoded) {
-            trackResponse(400);
-            return res.status(400).json({ error: 'Invalid token format' });
-        }
-
-        const config = getConfig(token);
-        let norm = null;
-
-        if (config) {
-            norm = normalizeConfig(config);
-        } else {
-            // Backward compatibility: try legacy encoded config
-            norm = parseConfig(token);
-            if (norm) {
-                logger.warn('Legacy encoded config URL detected for catalog request');
-            }
-        }
-
-        if (!norm) {
-            logger.error('Failed to decode token', { tokenLength: token.length, tokenPrefix: token.substring(0, 20) });
-            trackResponse(400);
-            return res.status(400).json({ error: "Missing or invalid configuration. Please regenerate your install link." });
-        }
-
-        const catalogType = catalogMatch[3].includes("movies_") ? "movie" : "series";
-        logger.info('Building catalog', { type: catalogType, catalogId: catalogMatch[3] });
-
-        try {
-            const metas = await circuitBreakers.flixpatrol.executeWithFallback(
-                () => buildCatalog(
-                    catalogType, catalogMatch[3],
-                    norm.tmdbApiKey, norm.rpdbApiKey,
-                    norm.multiCountries
-                ),
-                () => [] // Fallback to empty array if circuit is open
-            );
-
-            trackExternalApiCall('flixpatrol', true);
-            res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=7200");
-            trackResponse(200);
-            return res.status(200)
-                .setHeader("Content-Type", "application/json")
-                .json({ metas });
-        } catch (e) {
-            trackExternalApiCall('flixpatrol', false);
-            logger.error('Catalog build failed', { error: e.message });
-            trackResponse(503);
-            return res.status(503).json({ error: 'Service temporarily unavailable', requestId });
-        }
-    }
-
-    // -----------------------------------------------
-    // 404 — SEC-10 FIX: Don't leak information
-    // -----------------------------------------------
-    setCORSHeaders(res);
-    trackResponse(404);
-    return res.status(404).send("Not Found");
 };

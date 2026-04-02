@@ -1,9 +1,13 @@
 // ============================================================
 // Tests: Integration Tests
 // Tests the full request flow without external dependencies
+// FIX: Sets ENCRYPTION_KEY env before importing API handler
 // ============================================================
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// FIX: Set ENCRYPTION_KEY BEFORE any import that triggers config-store.js
+process.env.ENCRYPTION_KEY = 'test-encryption-key-32-chars-minimum-ok!';
 
 // Mock external dependencies
 const originalFetch = global.fetch;
@@ -14,6 +18,8 @@ describe('Integration Tests', () => {
     beforeEach(async () => {
         vi.resetModules();
         global.fetch = vi.fn();
+        // Re-import handler with fresh modules
+        handler = (await import('../api/index.js')).default;
     });
 
     afterEach(() => {
@@ -21,27 +27,32 @@ describe('Integration Tests', () => {
         vi.restoreAllMocks();
     });
 
+    function makeReqRes(method, url, body = null, extraHeaders = {}) {
+        const req = {
+            method,
+            url,
+            headers: { host: 'localhost:3000', ...extraHeaders },
+            body,
+            socket: { remoteAddress: '127.0.0.1' },
+        };
+
+        const res = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn().mockReturnThis(),
+            send: vi.fn().mockReturnThis(),
+            end: vi.fn().mockReturnThis(),
+            setHeader: vi.fn().mockReturnThis(),
+            headers: {},
+        };
+        res.req = req;
+        return { req, res };
+    }
+
     describe('Health Check Endpoint', () => {
         it('should return healthy status', async () => {
-            // Import fresh handler
-            handler = (await import('../api/index.js')).default;
+            const { res } = makeReqRes('GET', '/health');
 
-            const req = {
-                method: 'GET',
-                url: '/health',
-                headers: {},
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                json: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
-            await handler(req, res);
+            await handler({ ...makeReqRes('GET', '/health').req }, res);
 
             expect(res.status).toHaveBeenCalledWith(200);
             expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
@@ -52,23 +63,7 @@ describe('Integration Tests', () => {
         });
 
         it('should include rate limit information', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const req = {
-                method: 'GET',
-                url: '/health',
-                headers: {},
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                json: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
+            const { req, res } = makeReqRes('GET', '/health');
             await handler(req, res);
 
             const jsonCall = res.json.mock.calls[0][0];
@@ -80,23 +75,7 @@ describe('Integration Tests', () => {
 
     describe('Metrics Endpoint', () => {
         it('should return Prometheus-compatible metrics', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const req = {
-                method: 'GET',
-                url: '/metrics',
-                headers: {},
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                send: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
+            const { req, res } = makeReqRes('GET', '/metrics');
             await handler(req, res);
 
             expect(res.status).toHaveBeenCalledWith(200);
@@ -106,23 +85,7 @@ describe('Integration Tests', () => {
 
     describe('Configuration Page', () => {
         it('should return HTML for root path', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const req = {
-                method: 'GET',
-                url: '/',
-                headers: {},
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                send: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
+            const { req, res } = makeReqRes('GET', '/');
             await handler(req, res);
 
             expect(res.status).toHaveBeenCalledWith(200);
@@ -130,23 +93,7 @@ describe('Integration Tests', () => {
         });
 
         it('should return HTML for /configure path', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const req = {
-                method: 'GET',
-                url: '/configure',
-                headers: {},
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                send: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
+            const { req, res } = makeReqRes('GET', '/configure');
             await handler(req, res);
 
             expect(res.status).toHaveBeenCalledWith(200);
@@ -158,23 +105,7 @@ describe('Integration Tests', () => {
 
     describe('CORS Preflight', () => {
         it('should handle OPTIONS requests', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const req = {
-                method: 'OPTIONS',
-                url: '/any-path',
-                headers: {},
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                end: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
+            const { req, res } = makeReqRes('OPTIONS', '/any-path');
             await handler(req, res);
 
             expect(res.status).toHaveBeenCalledWith(200);
@@ -184,24 +115,7 @@ describe('Integration Tests', () => {
 
     describe('Save Config Endpoint', () => {
         it('should reject missing API key', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const req = {
-                method: 'POST',
-                url: '/api/save-config',
-                headers: { host: 'localhost:3000' },
-                body: {},
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                json: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
+            const { req, res } = makeReqRes('POST', '/api/save-config', {});
             await handler(req, res);
 
             expect(res.status).toHaveBeenCalledWith(400);
@@ -211,24 +125,7 @@ describe('Integration Tests', () => {
         });
 
         it('should reject invalid API key format', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const req = {
-                method: 'POST',
-                url: '/api/save-config',
-                headers: { host: 'localhost:3000' },
-                body: { tmdbApiKey: 'short' },
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                json: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
+            const { req, res } = makeReqRes('POST', '/api/save-config', { tmdbApiKey: 'short' });
             await handler(req, res);
 
             expect(res.status).toHaveBeenCalledWith(400);
@@ -238,29 +135,10 @@ describe('Integration Tests', () => {
         });
 
         it('should save valid configuration', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const req = {
-                method: 'POST',
-                url: '/api/save-config',
-                headers: {
-                    host: 'localhost:3000',
-                    'x-forwarded-proto': 'https',
-                },
-                body: {
-                    tmdbApiKey: 'validapikey12345678901234567890',
-                    country: 'Global',
-                },
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                json: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
+            const { req, res } = makeReqRes('POST', '/api/save-config', {
+                tmdbApiKey: 'validapikey12345678901234567890',
+                country: 'Global',
+            }, { 'x-forwarded-proto': 'https' });
 
             await handler(req, res);
 
@@ -275,23 +153,7 @@ describe('Integration Tests', () => {
 
     describe('Manifest Endpoint', () => {
         it('should reject invalid token format', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const req = {
-                method: 'GET',
-                url: '/invalid-token/manifest.json',
-                headers: {},
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                json: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
+            const { req, res } = makeReqRes('GET', '/invalid-token/manifest.json');
             await handler(req, res);
 
             expect(res.status).toHaveBeenCalledWith(400);
@@ -301,25 +163,8 @@ describe('Integration Tests', () => {
         });
 
         it('should return 404 for non-existent token', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const validToken = 'A'.repeat(32); // 32 char alphanumeric token
-
-            const req = {
-                method: 'GET',
-                url: `/${validToken}/manifest.json`,
-                headers: {},
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                json: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
+            const validToken = 'A'.repeat(32);
+            const { req, res } = makeReqRes('GET', `/${validToken}/manifest.json`);
             await handler(req, res);
 
             expect(res.status).toHaveBeenCalledWith(404);
@@ -328,26 +173,9 @@ describe('Integration Tests', () => {
 
     describe('Request ID', () => {
         it('should include request ID in response headers', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const req = {
-                method: 'GET',
-                url: '/',
-                headers: {},
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                send: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
+            const { req, res } = makeReqRes('GET', '/');
             await handler(req, res);
 
-            // Check that X-Request-Id was set
             const requestIdCalls = res.setHeader.mock.calls.filter(
                 call => call[0] === 'X-Request-Id'
             );
@@ -358,23 +186,7 @@ describe('Integration Tests', () => {
 
     describe('Security Headers', () => {
         it('should set security headers on all responses', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const req = {
-                method: 'GET',
-                url: '/health',
-                headers: {},
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                json: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
+            const { req, res } = makeReqRes('GET', '/health');
             await handler(req, res);
 
             const headerNames = res.setHeader.mock.calls.map(call => call[0]);
@@ -386,23 +198,7 @@ describe('Integration Tests', () => {
 
     describe('404 Handler', () => {
         it('should return 404 for unknown paths', async () => {
-            handler = (await import('../api/index.js')).default;
-
-            const req = {
-                method: 'GET',
-                url: '/unknown-path-12345',
-                headers: {},
-                socket: { remoteAddress: '127.0.0.1' },
-            };
-
-            const res = {
-                status: vi.fn().mockReturnThis(),
-                send: vi.fn().mockReturnThis(),
-                setHeader: vi.fn().mockReturnThis(),
-                headers: {},
-            };
-            res.req = req;
-
+            const { req, res } = makeReqRes('GET', '/unknown-path-12345');
             await handler(req, res);
 
             expect(res.status).toHaveBeenCalledWith(404);
