@@ -33,6 +33,15 @@ import { getHealthReport } from '../lib/health.js';
 // Module-level child logger for API handler
 const log = logger.child({ module: 'api' });
 
+/**
+ * Detect whether a token string is a legacy URL-encoded JSON config
+ * (contains "%22" = encoded double-quote) vs an opaque token.
+ * Opaque tokens are random base62 strings with no URL-encoded chars.
+ */
+function isLegacyEncodedConfig(token: string): boolean {
+    return token.includes('%22') || token.includes('%7B') || token.includes('%7D');
+}
+
 interface VercelRequest {
     method?: string;
     url?: string;
@@ -236,22 +245,26 @@ export default async function handler(
                 );
         }
 
-        // Backward compatibility: try parsing as legacy encoded config
-        const legacyConfig = parseConfig(token);
-        if (legacyConfig) {
-            log.warn({ token }, 'Legacy encoded config URL detected — consider regenerating install link');
-            res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=7200');
-            return res
-                .status(200)
-                .setHeader('Content-Type', 'application/json')
-                .json(
-                    buildManifest(
-                        legacyConfig.country,
-                        legacyConfig.multiCountries,
-                        legacyConfig.movieType,
-                        legacyConfig.seriesType,
-                    ),
-                );
+        // Backward compatibility: only try parsing if token looks like URL-encoded JSON
+        if (isLegacyEncodedConfig(token)) {
+            const legacyConfig = parseConfig(token);
+            if (legacyConfig) {
+                log.warn({ token }, 'Legacy encoded config URL detected — consider regenerating install link');
+                res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=7200');
+                return res
+                    .status(200)
+                    .setHeader('Content-Type', 'application/json')
+                    .json(
+                        buildManifest(
+                            legacyConfig.country,
+                            legacyConfig.multiCountries,
+                            legacyConfig.movieType,
+                            legacyConfig.seriesType,
+                        ),
+                    );
+            }
+        } else {
+            log.warn({ token }, 'Opaque token not found in config store (cold serverless instance)');
         }
 
         return res
@@ -278,12 +291,14 @@ export default async function handler(
 
         if (config) {
             norm = normalizeConfig(config);
-        } else {
-            // Backward compatibility: try legacy encoded config
+        } else if (isLegacyEncodedConfig(token)) {
+            // Backward compatibility: only try legacy parsing if token looks like URL-encoded JSON
             norm = parseConfig(token);
             if (norm) {
                 log.warn({ token }, 'Legacy encoded config URL detected for catalog request');
             }
+        } else {
+            log.warn({ token }, 'Opaque token not found in config store (cold serverless instance)');
         }
 
         if (!norm) {
@@ -331,11 +346,13 @@ export default async function handler(
 
         if (config) {
             norm = normalizeConfig(config);
-        } else {
+        } else if (isLegacyEncodedConfig(token)) {
             norm = parseConfig(token);
             if (norm) {
                 log.warn({ token }, 'Legacy encoded config URL detected for feed request');
             }
+        } else {
+            log.warn({ token }, 'Opaque token not found in config store (cold serverless instance)');
         }
 
         if (!norm) {
