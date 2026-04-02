@@ -85,6 +85,8 @@ export default async function handler(
     req: VercelRequest,
     res: VercelResponse,
 ): Promise<VercelResponse> {
+    // Top-level safety net: catch any unhandled errors to prevent 500 crashes
+    try {
     // Apply security headers to ALL responses
     applySecurityHeaders(res);
 
@@ -293,18 +295,24 @@ export default async function handler(
         }
 
         const catalogType = catalogMatch[3].includes('movies_') ? 'movie' : 'series';
-        const metas = await buildCatalog(
-            catalogType,
-            catalogMatch[3],
-            norm.tmdbApiKey,
-            norm.rpdbApiKey,
-            norm.multiCountries,
-        );
 
-        res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=7200');
-        return res.status(200)
-            .setHeader('Content-Type', 'application/json')
-            .json({ metas });
+        try {
+            const metas = await buildCatalog(
+                catalogType,
+                catalogMatch[3],
+                norm.tmdbApiKey,
+                norm.rpdbApiKey,
+                norm.multiCountries,
+            );
+
+            res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=7200');
+            return res.status(200)
+                .setHeader('Content-Type', 'application/json')
+                .json({ metas });
+        } catch (err) {
+            log.error({ err: err as Error, path: pathWithoutQuery, catalogId: catalogMatch[3] }, 'Catalog build failed');
+            return res.status(500).json({ metas: [] });
+        }
     }
 
     // -----------------------------------------------
@@ -357,6 +365,11 @@ export default async function handler(
     // -----------------------------------------------
     log.info({ path: pathWithoutQuery }, 'Route not found');
     return res.status(404).send('Not Found');
+
+    } catch (err) {
+        log.error({ err: err as Error }, 'Unhandled error in request handler');
+        return res.status(500).json({ error: 'Internal server error' });
+    }
 }
 
 

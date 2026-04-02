@@ -8,6 +8,9 @@ import { DEFAULTS, VERSION } from './constants.js';
 import { toIdSlug, pMap } from './utils.js';
 import { fetchFlixPatrolTitles } from './scraper.js';
 import { matchTMDB, getRpdbPosterUrl, StremioMeta } from './tmdb.js';
+import { logger } from './logger.js';
+
+const log = logger.child({ module: 'manifest' });
 
 export interface StremioManifest {
     id: string;
@@ -155,33 +158,54 @@ async function fetchCatalogFresh(
     multiCountries: string[],
     _platform: string,
 ): Promise<StremioMeta[]> {
-    const isGlobal = catalogId.endsWith('_global');
-    const tmdbType = type === 'movie' ? 'movie' : 'tv';
-    const categoryType = type === 'movie' ? 'Films' : 'TV';
+    try {
+        const isGlobal = catalogId.endsWith('_global');
+        const tmdbType = type === 'movie' ? 'movie' : 'tv';
+        const categoryType = type === 'movie' ? 'Films' : 'TV';
 
-    let targetCountry = 'Global';
-    if (!isGlobal) {
-        // Support platform-agnostic catalog IDs: "{platform}_top10_{movies|series}_{slug}"
-        const prefixMatch = catalogId.match(/^(.+?)_top10_(?:movies|series)_(.+)$/);
-        if (prefixMatch) {
-            const idSlug = prefixMatch[2];
-            targetCountry = multiCountries.find((c) => toIdSlug(c) === idSlug) || idSlug.replace(/_/g, ' ');
+        let targetCountry = 'Global';
+        if (!isGlobal) {
+            // Support platform-agnostic catalog IDs: "{platform}_top10_{movies|series}_{slug}"
+            const prefixMatch = catalogId.match(/^(.+?)_top10_(?:movies|series)_(.+)$/);
+            if (prefixMatch) {
+                const idSlug = prefixMatch[2];
+                targetCountry = multiCountries.find((c) => toIdSlug(c) === idSlug) || idSlug.replace(/_/g, ' ');
+            }
         }
+
+        log.info({ catalogId, type, targetCountry }, 'Fetching fresh catalog data');
+
+        let items;
+        try {
+            items = await fetchFlixPatrolTitles(categoryType, targetCountry);
+        } catch (scrapeErr) {
+            log.error({ err: scrapeErr as Error, catalogId, targetCountry }, 'FlixPatrol scrape failed');
+            return [];
+        }
+        if (items.length === 0) return [];
+
+        // Match each title against TMDB — individual failures are non-fatal
+        const metas = (
+            await pMap(
+                items,
+                async (item) => {
+                    try {
+                        return await matchTMDB(item, tmdbType, apiKey);
+                    } catch (tmdbErr) {
+                        log.warn({ err: tmdbErr as Error, title: item.title }, 'TMDB match failed for title, skipping');
+                        return null;
+                    }
+                },
+                DEFAULTS.TMDB_CONCURRENCY,
+            )
+        ).filter((v): v is StremioMeta => v !== null && v !== undefined);
+
+        if (metas.length > 0) {
+            catalogCache.set(cacheKey, metas);
+        }
+        return metas;
+    } catch (err) {
+        log.error({ err: err as Error, catalogId, type }, 'Unexpected error building catalog');
+        return [];
     }
-
-    const items = await fetchFlixPatrolTitles(categoryType, targetCountry);
-    if (items.length === 0) return [];
-
-    const metas = (
-        await pMap(
-            items,
-            (item) => matchTMDB(item, tmdbType, apiKey),
-            DEFAULTS.TMDB_CONCURRENCY,
-        )
-    ).filter((v): v is StremioMeta => v !== null && v !== undefined);
-
-    if (metas.length > 0) {
-        catalogCache.set(cacheKey, metas);
-    }
-    return metas;
 }
