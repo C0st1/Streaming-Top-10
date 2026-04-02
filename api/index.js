@@ -481,13 +481,18 @@ module.exports = async (req, res) => {
         setCORSHeaders(res);
         const token = pathWithoutQuery.replace("/manifest.json", "").replace(/^\//, "");
 
-        // SEC-14 FIX: Validate token format (32 alphanumeric chars)
-        if (!/^[a-zA-Z0-9]{32}$/.test(token)) {
+        // Validate token: URL-safe base64 with dots (encrypted) or legacy format
+        // New encrypted tokens: base64 chars + - _ . ~
+        // Legacy tokens: URL-encoded JSON or 32 alphanumeric
+        const isNewToken = /^[A-Za-z0-9._~-]+$/.test(token) && token.length > 50;
+        const isLegacyToken = /^[a-zA-Z0-9]{32}$/.test(token) || token.startsWith('%7B');
+        
+        if (!isNewToken && !isLegacyToken) {
             trackResponse(400);
             return res.status(400).json({ error: 'Invalid token format' });
         }
 
-        // SEC-02 FIX: Look up config by opaque token
+        // Try encrypted token first (new format)
         const config = getConfig(token);
         if (config) {
             const norm = normalizeConfig(config);
@@ -531,8 +536,12 @@ module.exports = async (req, res) => {
 
         const token = catalogMatch[1];
 
-        // SEC-14 FIX: Validate token format
-        if (token && !/^[a-zA-Z0-9]{32}$/.test(token) && !/^[a-zA-Z0-9%_-]+$/.test(token)) {
+        // Validate token: accept new encrypted format, legacy format, or URL-encoded JSON
+        const isNewToken = /^[A-Za-z0-9._~-]+$/.test(token) && token.length > 50;
+        const isLegacyToken = /^[a-zA-Z0-9]{32}$/.test(token);
+        const isUrlEncoded = token.includes('%') || token.startsWith('%7B');
+        
+        if (!isNewToken && !isLegacyToken && !isUrlEncoded) {
             trackResponse(400);
             return res.status(400).json({ error: 'Invalid token format' });
         }
@@ -551,6 +560,7 @@ module.exports = async (req, res) => {
         }
 
         if (!norm) {
+            logger.error('Failed to decode token', { tokenLength: token.length, tokenPrefix: token.substring(0, 20) });
             trackResponse(400);
             return res.status(400).json({ error: "Missing or invalid configuration. Please regenerate your install link." });
         }

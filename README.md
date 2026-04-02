@@ -162,7 +162,7 @@ Wait for `X-RateLimit-Reset` seconds before retrying.
 5. Click **Generate Install Link**
 6. Click **Install to Stremio**
 
-> **Note:** Your API key is stored securely on the server. The manifest URL contains only an opaque token — your credentials are never exposed.
+> **Note:** Your API key is encrypted and embedded in the manifest URL token. This means your addon URL works across serverless function instances (no server-side state needed). Your credentials are encrypted with AES-256-GCM and never exposed in plaintext.
 
 ---
 
@@ -177,6 +177,16 @@ npm install
 npm i -g vercel
 vercel
 ```
+
+**Important:** After deploying, set the `ENCRYPTION_KEY` environment variable in Vercel:
+
+1. Go to your project in Vercel Dashboard
+2. Navigate to **Settings → Environment Variables**
+3. Add `ENCRYPTION_KEY` with a secure random string (at least 32 characters)
+4. Generate one with: `openssl rand -base64 32`
+5. Redeploy for the change to take effect
+
+> ⚠️ If you don't set `ENCRYPTION_KEY`, a default key will be used. This is fine for testing but **not secure for production**.
 
 ### Local Development
 
